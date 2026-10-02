@@ -66,7 +66,7 @@ export default function RegisterPage() {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        to: formData.email || 'ac5818204@gmail.com',
+        to: formData.email || 'customer@example.com',
         type: 'otp',
         otp: newOtp
       })
@@ -77,7 +77,7 @@ export default function RegisterPage() {
       setTimer(60);
       setCanResend(false);
       setLoading(false);
-      setSuccessMsg(`Verification OTP sent successfully to ${formData.email || 'ac5818204@gmail.com'}`);
+      setSuccessMsg(`Verification OTP sent successfully to ${formData.email || 'customer@example.com'}`);
     }, 800);
   };
 

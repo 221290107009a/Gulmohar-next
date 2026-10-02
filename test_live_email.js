@@ -12,14 +12,14 @@ const transporter = nodemailer.createTransport({
 
 async function testEmail() {
   console.log('--- STARTING LIVE GMAIL DISPATCH TEST ---');
-  console.log('Target Email: ac5818204@gmail.com');
+  console.log('Target Email: customer@example.com');
   console.log('Sender Email: footweargulmohar@gmail.com');
 
   try {
     // 1. Send OTP Verification Email
     const info1 = await transporter.sendMail({
       from: '"Gulmohar Footwear" <footweargulmohar@gmail.com>',
-      to: 'ac5818204@gmail.com',
+      to: 'customer@example.com',
       subject: '[Gulmohar Footwear] Your Account Verification OTP Code: 894021',
       html: `
         <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; background: #ffffff; border: 1px solid #e0e0e0; border-radius: 16px; overflow: hidden;">
@@ -49,7 +49,7 @@ async function testEmail() {
     // 2. Send Order Confirmation Email
     const info2 = await transporter.sendMail({
       from: '"Gulmohar Footwear" <footweargulmohar@gmail.com>',
-      to: 'ac5818204@gmail.com',
+      to: 'customer@example.com',
       subject: '[Gulmohar Order Confirmed] Invoice & Receipt for Order #GM-749201',
       html: `
         <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; background: #ffffff; border: 1px solid #e0e0e0; border-radius: 16px; overflow: hidden;">
@@ -64,7 +64,7 @@ async function testEmail() {
             <div style="background: #f8f9fa; border: 1px solid #e0e0e0; border-radius: 12px; padding: 16px; margin: 20px 0;">
               <h3 style="margin: 0 0 12px 0; font-size: 14px; color: #111;">Order Summary:</h3>
               <p style="margin: 4px 0; font-size: 13px;"><strong>Customer Name:</strong> Yousaf Khan</p>
-              <p style="margin: 4px 0; font-size: 13px;"><strong>Email Address:</strong> ac5818204@gmail.com</p>
+              <p style="margin: 4px 0; font-size: 13px;"><strong>Email Address:</strong> customer@example.com</p>
               <p style="margin: 4px 0; font-size: 13px;"><strong>Shipping Address:</strong> Gulmohar Footwear, Vadla RTO Road, Gujarat 364002</p>
               <p style="margin: 4px 0; font-size: 13px;"><strong>Item Purchased:</strong> Handcrafted Artisan Kolhapuri Mojari (Size: UK 7)</p>
               <p style="margin: 4px 0; font-size: 13px; color: #e63946;"><strong>Total Paid:</strong> ₹1,499</p>

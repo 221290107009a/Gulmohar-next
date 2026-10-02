@@ -55,7 +55,7 @@ export default function ForgotPasswordPage() {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        to: contactInput || 'ac5818204@gmail.com',
+        to: contactInput || 'customer@example.com',
         type: 'otp',
         otp: newOtp,
         subject: `[Gulmohar Footwear] Password Reset OTP Code: ${newOtp}`

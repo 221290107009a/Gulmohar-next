@@ -6,7 +6,7 @@ export async function POST(request: Request) {
     const body = await request.json();
     const { to, type, otp, orderDetails, subject } = body;
 
-    const targetEmail = to || 'ac5818204@gmail.com';
+    const targetEmail = to || 'customer@example.com';
 
     // Get SMTP Configuration from environment variables
     const host = process.env.SMTP_HOST || 'smtp.gmail.com';
