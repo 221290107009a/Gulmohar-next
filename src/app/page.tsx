@@ -262,7 +262,7 @@ export default function HomePage() {
                     ))}
                   </div>
                   <p className="text-sm text-gray-600 italic leading-relaxed">
-                    "{review.comment}"
+                    &quot;{review.comment}&quot;
                   </p>
                 </div>
 

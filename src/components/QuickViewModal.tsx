@@ -3,11 +3,12 @@
 import React, { useState } from 'react';
 import Image from 'next/image';
 import Link from 'next/link';
-import { X, Star, ShoppingBag, Heart, Check, AlertCircle } from 'lucide-react';
+import { useRouter } from 'next/navigation';
+import { X, Star, ShoppingBag, Heart, Check, AlertCircle, Zap } from 'lucide-react';
 import { ProductItem, ProductSizeItem } from '@/data/dummyData';
 import { useCart } from '@/context/CartContext';
 import { useWishlist } from '@/context/WishlistContext';
-import { formatPrice, calculateDiscount } from '@/lib/utils';
+import { formatPrice, calculateDiscount, stripHtml } from '@/lib/utils';
 
 interface QuickViewModalProps {
   product: ProductItem | null;
@@ -27,10 +28,18 @@ export const QuickViewModal: React.FC<QuickViewModalProps> = ({ product, onClose
 
   const currentImg = selectedImage || product.images[0];
   const isWishlisted = isInWishlist(product.id);
-  const discount = calculateDiscount(product.original_price, product.price);
+  const hasSpecialPrice = Boolean(
+    product.has_special_price ?? (product.special_price && product.special_price < product.original_price)
+  ) || (product.badge === 'SALE' && product.original_price > product.price);
+  const discount = hasSpecialPrice ? calculateDiscount(product.original_price, product.price) : 0;
 
+  const hasSizes = product.sizes && product.sizes.length > 0;
   const activeSize = selectedSizeObj || product.sizes?.find(s => s.in_stock && s.qty > 0) || product.sizes?.[0];
-  const isSelectedSizeAvailable = activeSize?.in_stock && (activeSize?.qty ?? 0) > 0;
+  const isSelectedSizeAvailable = product.in_stock !== false && (hasSizes
+    ? Boolean(activeSize?.in_stock && (activeSize?.qty ?? 0) > 0)
+    : true);
+
+  const router = useRouter();
 
   const handleAdd = () => {
     if (!isSelectedSizeAvailable) return;
@@ -40,6 +49,13 @@ export const QuickViewModal: React.FC<QuickViewModalProps> = ({ product, onClose
       setIsAdded(false);
       onClose();
     }, 1200);
+  };
+
+  const handleBuyNow = () => {
+    if (!isSelectedSizeAvailable) return;
+    addToCart(product, quantity, product.colors?.[0], activeSize?.size);
+    onClose();
+    router.push('/checkout');
   };
 
   return (
@@ -68,7 +84,7 @@ export const QuickViewModal: React.FC<QuickViewModalProps> = ({ product, onClose
               sizes="(max-width: 768px) 100vw, 50vw"
               className="object-cover"
             />
-            {discount > 0 && (
+            {hasSpecialPrice && discount > 0 && (
               <span className="absolute top-3 left-3 px-3 py-1 bg-[#e63946] text-white text-xs font-bold rounded-full">
                 SAVE {discount}%
               </span>
@@ -120,7 +136,7 @@ export const QuickViewModal: React.FC<QuickViewModalProps> = ({ product, onClose
               <span className="text-2xl font-extrabold text-[#e63946]">
                 {formatPrice(product.price)}
               </span>
-              {product.original_price > product.price && (
+              {hasSpecialPrice && discount > 0 && product.original_price > product.price && (
                 <span className="text-sm text-gray-400 line-through">
                   {formatPrice(product.original_price)}
                 </span>
@@ -128,7 +144,7 @@ export const QuickViewModal: React.FC<QuickViewModalProps> = ({ product, onClose
             </div>
 
             <p className="text-xs text-gray-600 leading-relaxed">
-              {product.description}
+              {stripHtml(product.description)}
             </p>
 
             {/* Size Selector with Backend Quantity Display */}
@@ -209,37 +225,51 @@ export const QuickViewModal: React.FC<QuickViewModalProps> = ({ product, onClose
           </div>
 
           {/* Action Buttons */}
-          <div className="pt-6 space-y-3">
-            <button
-              onClick={handleAdd}
-              disabled={!isSelectedSizeAvailable || isAdded}
-              className={`w-full py-3.5 rounded-xl font-bold text-xs uppercase tracking-wider flex items-center justify-center gap-2 shadow-lg transition-all ${
-                isAdded 
-                  ? 'bg-emerald-600 text-white' 
-                  : isSelectedSizeAvailable
-                  ? 'bg-[#e63946] hover:bg-[#c1121f] text-white'
-                  : 'bg-gray-200 text-gray-400 cursor-not-allowed shadow-none'
-              }`}
-            >
-              {isAdded ? (
-                <>
-                  <Check className="w-4 h-4" /> Added to Bag!
-                </>
-              ) : isSelectedSizeAvailable ? (
-                <>
-                  <ShoppingBag className="w-4 h-4" /> Add {activeSize?.size} to Bag
-                </>
-              ) : (
-                <>
-                  <AlertCircle className="w-4 h-4" /> Size Currently Out of Stock
-                </>
-              )}
-            </button>
+          <div className="pt-6 space-y-2.5">
+            <div className="grid grid-cols-2 gap-3">
+              <button
+                onClick={handleAdd}
+                disabled={!isSelectedSizeAvailable || isAdded}
+                className={`py-3.5 rounded-xl font-bold text-xs uppercase tracking-wider flex items-center justify-center gap-1.5 shadow-md transition-all ${
+                  isAdded 
+                    ? 'bg-emerald-600 text-white' 
+                    : isSelectedSizeAvailable
+                    ? 'bg-gray-900 hover:bg-black text-white active:scale-98'
+                    : 'bg-gray-200 text-gray-400 cursor-not-allowed shadow-none'
+                }`}
+              >
+                {isAdded ? (
+                  <>
+                    <Check className="w-4 h-4" /> Added to Bag!
+                  </>
+                ) : isSelectedSizeAvailable ? (
+                  <>
+                    <ShoppingBag className="w-4 h-4" /> Add to Bag
+                  </>
+                ) : (
+                  <>
+                    <AlertCircle className="w-4 h-4" /> Out of Stock
+                  </>
+                )}
+              </button>
+
+              <button
+                onClick={handleBuyNow}
+                disabled={!isSelectedSizeAvailable}
+                className={`py-3.5 rounded-xl font-bold text-xs uppercase tracking-wider flex items-center justify-center gap-1.5 shadow-lg transition-all ${
+                  isSelectedSizeAvailable
+                    ? 'bg-[#e63946] hover:bg-[#c1121f] text-white active:scale-98'
+                    : 'bg-gray-200 text-gray-400 cursor-not-allowed shadow-none'
+                }`}
+              >
+                <Zap className="w-4 h-4 fill-white" /> Buy Now
+              </button>
+            </div>
 
             <Link
               href={`/product/${product.id}`}
               onClick={onClose}
-              className="block text-center text-xs font-bold text-gray-600 hover:text-[#e63946] hover:underline"
+              className="block text-center text-xs font-bold text-gray-500 hover:text-[#e63946] hover:underline pt-1"
             >
               View Full Product Specifications & Details →
             </Link>

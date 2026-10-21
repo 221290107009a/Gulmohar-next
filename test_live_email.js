@@ -1,12 +1,20 @@
+/* eslint @typescript-eslint/no-require-imports: "off" */
 const nodemailer = require('nodemailer');
+
+const smtpUser = process.env.SMTP_USER;
+const smtpPass = process.env.SMTP_PASS;
+
+if (!smtpUser || !smtpPass) {
+  throw new Error('Set SMTP_USER and SMTP_PASS before running this live email test.');
+}
 
 const transporter = nodemailer.createTransport({
   host: 'smtp.gmail.com',
   port: 587,
   secure: false,
   auth: {
-    user: 'footweargulmohar@gmail.com',
-    pass: 'xgxxmtsagxcbiynl'
+    user: smtpUser,
+    pass: smtpPass
   }
 });
 
@@ -18,7 +26,7 @@ async function testEmail() {
   try {
     // 1. Send OTP Verification Email
     const info1 = await transporter.sendMail({
-      from: '"Gulmohar Footwear" <footweargulmohar@gmail.com>',
+      from: `"Gulmohar Footwear" <${smtpUser}>`,
       to: 'customer@example.com',
       subject: '[Gulmohar Footwear] Your Account Verification OTP Code: 894021',
       html: `
@@ -48,7 +56,7 @@ async function testEmail() {
 
     // 2. Send Order Confirmation Email
     const info2 = await transporter.sendMail({
-      from: '"Gulmohar Footwear" <footweargulmohar@gmail.com>',
+      from: `"Gulmohar Footwear" <${smtpUser}>`,
       to: 'customer@example.com',
       subject: '[Gulmohar Order Confirmed] Invoice & Receipt for Order #GM-749201',
       html: `

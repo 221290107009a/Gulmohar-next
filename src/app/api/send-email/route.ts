@@ -6,7 +6,10 @@ export async function POST(request: Request) {
     const body = await request.json();
     const { to, type, otp, orderDetails, subject } = body;
 
-    const targetEmail = to || 'customer@example.com';
+    if (typeof to !== 'string' || !to.trim()) {
+      return NextResponse.json({ success: false, error: 'A recipient email address is required.' }, { status: 400 });
+    }
+    const targetEmail = to.trim();
 
     // Get SMTP Configuration from environment variables
     const host = process.env.SMTP_HOST || 'smtp.gmail.com';
@@ -46,7 +49,7 @@ export async function POST(request: Request) {
         </div>
       `;
     } else if (type === 'order') {
-      emailSubject = subject || `[Gulmohar Order Confirmed] Invoice & Receipt for Order #${orderDetails?.orderId || 'ORD-9821'}`;
+      emailSubject = subject || `[Gulmohar Order Confirmed] Invoice & Receipt for Order #${orderDetails?.orderId || 'Gulmohar'}`;
       emailHtml = `
         <div style="font-family: 'Helvetica Neue', Arial, sans-serif; max-width: 600px; margin: 0 auto; background: #ffffff; border: 1px solid #e0e0e0; border-radius: 16px; overflow: hidden;">
           <div style="background: #0f1117; padding: 24px; text-align: center; border-bottom: 3px solid #e63946;">
@@ -55,7 +58,7 @@ export async function POST(request: Request) {
           </div>
           <div style="padding: 24px;">
             <h2 style="color: #27ae60; margin-top: 0;">✓ Thank You for Your Order!</h2>
-            <p style="color: #444444; font-size: 14px; line-height: 1.6;">Your order <strong>#${orderDetails?.orderId || 'ORD-9821'}</strong> has been confirmed and is being prepared by our artisan team.</p>
+            <p style="color: #444444; font-size: 14px; line-height: 1.6;">Your order ${orderDetails?.orderId ? `<strong>#${orderDetails.orderId}</strong> ` : ''}has been confirmed and is being prepared by our artisan team.</p>
             
             <div style="background: #f8f9fa; border: 1px solid #e0e0e0; border-radius: 12px; padding: 16px; margin: 20px 0;">
               <h3 style="margin: 0 0 12px 0; font-size: 14px; color: #111;">Order Details:</h3>
@@ -93,7 +96,7 @@ export async function POST(request: Request) {
       };
 
       const info = await transporter.sendMail(mailOptions);
-      console.log(`[Email Sent Success] MessageID: ${info.messageId} to ${targetEmail}`);
+      console.log(`[Email Sent Success] MessageID: ${info.messageId}`);
 
       return NextResponse.json({
         success: true,
@@ -103,20 +106,15 @@ export async function POST(request: Request) {
       });
     }
 
-    // Fallback simulation log when SMTP credentials are pending in .env
-    console.log(`[Simulated Email Dispatch] Target: ${targetEmail} | OTP: ${otp || 'N/A'}`);
-
     return NextResponse.json({
-      success: true,
+      success: false,
       sent: false,
-      simulated: true,
-      targetEmail,
-      otp,
-      message: `Email request created for ${targetEmail}. Configure SMTP_USER and SMTP_PASS in .env.local to send live emails.`
-    });
+      error: 'Email delivery is not configured on the server.'
+    }, { status: 503 });
 
-  } catch (err: any) {
+  } catch (err: unknown) {
     console.error('[Email Dispatch Error]', err);
-    return NextResponse.json({ success: false, error: err.message }, { status: 500 });
+    const error = err instanceof Error ? err.message : 'Email dispatch failed';
+    return NextResponse.json({ success: false, error }, { status: 500 });
   }
 }

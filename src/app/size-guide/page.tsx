@@ -61,7 +61,7 @@ export default function SizeGuideFaqsPage() {
 
           {/* Men's Size Table */}
           <div className="space-y-3">
-            <h3 className="font-bold text-sm text-gray-900 uppercase tracking-wider text-[#e63946]">Men's Footwear Size Conversion</h3>
+            <h3 className="font-bold text-sm text-gray-900 uppercase tracking-wider text-[#e63946]">Men&apos;s Footwear Size Conversion</h3>
             <div className="overflow-x-auto rounded-2xl border border-gray-200">
               <table className="w-full text-xs text-left">
                 <thead className="bg-[#0f1117] text-[#f5d77f] font-bold uppercase">
@@ -86,7 +86,7 @@ export default function SizeGuideFaqsPage() {
 
           {/* Women's Size Table */}
           <div className="space-y-3 pt-4">
-            <h3 className="font-bold text-sm text-gray-900 uppercase tracking-wider text-[#e63946]">Women's Footwear Size Conversion</h3>
+            <h3 className="font-bold text-sm text-gray-900 uppercase tracking-wider text-[#e63946]">Women&apos;s Footwear Size Conversion</h3>
             <div className="overflow-x-auto rounded-2xl border border-gray-200">
               <table className="w-full text-xs text-left">
                 <thead className="bg-[#0f1117] text-[#f5d77f] font-bold uppercase">

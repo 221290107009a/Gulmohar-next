@@ -38,6 +38,52 @@ export const Header: React.FC = () => {
   const [isCategoryOpen, setIsCategoryOpen] = useState(false);
   const [categories, setCategories] = useState<CategoryItem[]>([]);
 
+  const [isVisible, setIsVisible] = useState(true);
+  const [isScrolled, setIsScrolled] = useState(false);
+
+  useEffect(() => {
+    let lastScrollY = typeof window !== 'undefined' ? window.scrollY : 0;
+
+    const handleScroll = () => {
+      const currentScrollY = Math.max(0, window.scrollY);
+
+      // When near the top of the page, always show header
+      if (currentScrollY <= 80) {
+        setIsVisible(true);
+        setIsScrolled(false);
+        lastScrollY = currentScrollY;
+        return;
+      }
+
+      setIsScrolled(true);
+
+      // If mobile drawer is open, keep header visible
+      if (isMobileMenuOpen) {
+        setIsVisible(true);
+        return;
+      }
+
+      const diff = currentScrollY - lastScrollY;
+
+      // Small threshold (8px) to avoid jitter on micro-movements
+      if (diff > 8) {
+        // Scrolling DOWN -> Hide smoothly
+        setIsVisible(false);
+        setIsCategoryOpen(false);
+        setIsCartDropdownOpen(false);
+        setIsAccountDropdownOpen(false);
+      } else if (diff < -8) {
+        // Scrolling UP -> Reveal smoothly
+        setIsVisible(true);
+      }
+
+      lastScrollY = currentScrollY;
+    };
+
+    window.addEventListener('scroll', handleScroll, { passive: true });
+    return () => window.removeEventListener('scroll', handleScroll);
+  }, [isMobileMenuOpen]);
+
   useEffect(() => {
     async function fetchBackendCategories() {
       try {
@@ -61,29 +107,19 @@ export const Header: React.FC = () => {
   };
 
   return (
-    <header className="w-full z-50 sticky top-0 bg-white transition-all shadow-sm">
+    <header
+      className={`w-full z-50 sticky top-0 bg-white transition-all duration-300 ease-in-out ${isVisible ? 'translate-y-0 opacity-100 pointer-events-auto' : '-translate-y-full opacity-90 pointer-events-none'
+        } ${isScrolled ? 'shadow-md' : 'shadow-sm'}`}
+    >
       {/* 1. TOP ANNOUNCEMENT BAR */}
       <div className="bg-[#0f1117] text-white text-xs border-b border-[#222736] py-2 px-4">
-        <div className="max-w-7xl mx-auto flex flex-col md:flex-row justify-between items-center gap-2">
-          <div className="flex items-center gap-2">
-            <span className="inline-flex items-center gap-1 bg-[#e63946] text-white px-2 py-0.5 rounded font-semibold text-[10px] uppercase tracking-wider">
-              <Sparkles className="w-3 h-3 animate-pulse" /> Footwear Sale Live
-            </span>
-            <span className="text-gray-300">
-              Get Up to <strong className="text-[#f5d77f]">50% OFF</strong> on Handcrafted Leather Shoes & Heels!
-            </span>
-          </div>
-
+        <div className="max-w-7xl mx-auto flex justify-end items-center gap-2">
           <div className="flex items-center gap-5 text-gray-400">
             <div className="flex items-center gap-1.5">
               <Phone className="w-3.5 h-3.5 text-[#d4af37]" />
               <span>Hotline: +91 9429974671</span>
             </div>
             <span className="text-gray-600">|</span>
-            <div className="flex items-center gap-1">
-              <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" />
-              <span>100% Genuine Artisan Leather</span>
-            </div>
           </div>
         </div>
       </div>
@@ -93,18 +129,18 @@ export const Header: React.FC = () => {
         <div className="max-w-7xl mx-auto flex items-center justify-between gap-4">
 
           {/* Logo Section */}
-          <Link href="/" className="flex items-center gap-3 group shrink-0">
-            <div className="relative w-12 h-12 md:w-14 md:h-14 rounded-xl overflow-hidden shadow-md border border-[#d4af37]/40 p-0.5 bg-[#0f1117] group-hover:scale-105 transition-transform duration-300">
+          <Link href="/" className="flex items-center gap-3.5 group shrink-0">
+            <div className="relative w-16 h-16 sm:w-18 sm:h-18 md:w-20 md:h-20 rounded-2xl overflow-hidden shadow-lg border border-[#d4af37]/50 p-0.5 bg-[#0f1117] group-hover:scale-105 transition-transform duration-300">
               <Image
                 src="/img/gulmohar-logo.png"
                 alt="Gulmohar Footwear Logo"
                 fill
-                sizes="56px"
+                sizes="(max-width: 768px) 72px, 80px"
                 className="object-cover"
                 priority
               />
             </div>
-            <div className="flex flex-col">
+            <div className="flex flex-col justify-center">
               <span className="text-xl md:text-2xl font-extrabold tracking-tight text-[#0f1117] flex items-center gap-1 font-serif">
                 GULMOHAR <span className="text-[#e63946]">FOOTWEAR</span>
               </span>
@@ -363,7 +399,7 @@ export const Header: React.FC = () => {
                     className="flex items-center justify-between px-5 py-2.5 text-xs font-semibold hover:bg-red-50 hover:text-[#e63946] transition-colors border-b border-gray-50 last:border-0"
                   >
                     <span>{cat.title}</span>
-                    <span className="text-[10px] text-gray-400 bg-gray-100 px-2 py-0.5 rounded-full">{cat.itemCount || 'Collection'}</span>
+                    <span className="text-[10px] text-gray-400 bg-gray-100 px-2 py-0.5 rounded-full">{cat.itemCount ?? 0}</span>
                   </Link>
                 ))}
               </div>
@@ -379,13 +415,13 @@ export const Header: React.FC = () => {
               All Collection
             </Link>
             <Link href="/shop?category=men-footwear" className="px-5 py-3.5 font-semibold text-xs tracking-wider uppercase hover:text-[#f5d77f] hover:bg-white/5 transition-colors">
-              Men's Collection
+              Men&apos;s Collection
             </Link>
             <Link href="/shop?category=women-footwear" className="px-5 py-3.5 font-semibold text-xs tracking-wider uppercase hover:text-[#f5d77f] hover:bg-white/5 transition-colors">
-              Women's Collection
+              Women&apos;s Collection
             </Link>
             <Link href="/shop?category=kids-footwear" className="px-5 py-3.5 font-semibold text-xs tracking-wider uppercase hover:text-[#f5d77f] hover:bg-white/5 transition-colors">
-              Kid's Collection
+              Kid&apos;s Collection
             </Link>
             <Link href="/contact" className="px-5 py-3.5 font-semibold text-xs tracking-wider uppercase hover:text-[#f5d77f] hover:bg-white/5 transition-colors">
               Contact

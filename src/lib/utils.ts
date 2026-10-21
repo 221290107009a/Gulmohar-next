@@ -20,9 +20,15 @@ export function calculateDiscount(originalPrice: number, sellingPrice: number): 
   return Math.round(((originalPrice - sellingPrice) / originalPrice) * 100);
 }
 
+export function stripHtml(html?: string): string {
+  if (!html) return '';
+  return html.replace(/<[^>]*>?/gm, '').trim();
+}
+
 export function truncateText(text: string, length: number = 80): string {
   if (!text) return '';
-  const clean = text.replace(/<[^>]*>?/gm, '');
+  const clean = stripHtml(text);
   if (clean.length <= length) return clean;
   return clean.substring(0, length) + '...';
 }
+

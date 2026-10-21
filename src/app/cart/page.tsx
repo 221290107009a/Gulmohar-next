@@ -3,8 +3,8 @@
 import React, { useState } from 'react';
 import Link from 'next/link';
 import Image from 'next/image';
-import { Trash2, ShoppingBag, ArrowRight, ShieldCheck, Tag, ArrowLeft } from 'lucide-react';
-import { useCart } from '@/context/CartContext';
+import { Trash2, ShoppingBag, ArrowRight, ShieldCheck, Tag, ArrowLeft, AlertCircle } from 'lucide-react';
+import { useCart, isCartItemInStock } from '@/context/CartContext';
 import { formatPrice } from '@/lib/utils';
 
 export default function CartPage() {
@@ -18,7 +18,9 @@ export default function CartPage() {
     updateQuantity, 
     removeFromCart, 
     clearCart,
-    applyCoupon 
+    applyCoupon,
+    hasOutOfStockItems,
+    removeOutOfStockItems
   } = useCart();
 
   const [inputCoupon, setInputCoupon] = useState('');
@@ -80,9 +82,28 @@ export default function CartPage() {
         
         {/* Cart Items List Table */}
         <div className="lg:col-span-2 space-y-4">
+          {hasOutOfStockItems && (
+            <div className="p-4 bg-red-50 border border-red-200 rounded-2xl flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs text-red-700">
+              <div className="flex items-center gap-2">
+                <AlertCircle className="w-5 h-5 text-red-600 shrink-0" />
+                <span><strong>Attention:</strong> Some items in your bag are out of stock. Please remove them to proceed.</span>
+              </div>
+              <button
+                onClick={removeOutOfStockItems}
+                className="px-3 py-1.5 bg-red-600 hover:bg-red-700 text-white font-bold rounded-lg text-xs self-start sm:self-auto shrink-0 transition-colors"
+              >
+                Remove Out of Stock
+              </button>
+            </div>
+          )}
+
           <div className="divide-y divide-gray-100 bg-white border border-gray-100 rounded-3xl p-6 shadow-sm">
-            {items.map((item, idx) => (
-              <div key={idx} className="py-5 first:pt-0 last:pb-0 flex flex-col sm:flex-row items-start sm:items-center gap-4 justify-between">
+            {items.map((item, idx) => {
+              const inStock = isCartItemInStock(item);
+              return (
+              <div key={idx} className={`py-5 first:pt-0 last:pb-0 flex flex-col sm:flex-row items-start sm:items-center gap-4 justify-between ${
+                !inStock ? 'opacity-80' : ''
+              }`}>
                 
                 {/* Image & Title */}
                 <div className="flex items-center gap-4 min-w-0">
@@ -106,6 +127,11 @@ export default function CartPage() {
                     <div className="flex items-center gap-3 text-xs text-gray-500">
                       {item.selectedSize && <span>Size: <strong className="text-gray-800">{item.selectedSize}</strong></span>}
                       <span>Unit: <strong className="text-gray-800">{formatPrice(item.product.price)}</strong></span>
+                      {!inStock && (
+                        <span className="px-2 py-0.5 rounded text-[10px] font-extrabold uppercase bg-red-100 text-red-700 border border-red-200">
+                          Out of Stock
+                        </span>
+                      )}
                     </div>
                   </div>
                 </div>
@@ -145,7 +171,8 @@ export default function CartPage() {
                 </div>
 
               </div>
-            ))}
+              );
+            })}
           </div>
 
           <div className="pt-2">
@@ -229,13 +256,31 @@ export default function CartPage() {
               </div>
             </div>
 
-            <Link
-              href="/checkout"
-              className="w-full py-4 bg-[#e63946] hover:bg-[#c1121f] text-white font-bold rounded-xl text-xs uppercase tracking-wider shadow-lg shadow-red-600/30 flex items-center justify-center gap-2 transition-all mt-4"
-            >
-              <span>Proceed to Checkout</span>
-              <ArrowRight className="w-4 h-4" />
-            </Link>
+            {hasOutOfStockItems ? (
+              <div className="space-y-2 mt-4">
+                <button
+                  disabled
+                  className="w-full py-4 bg-gray-200 text-gray-500 font-bold rounded-xl text-xs uppercase tracking-wider flex items-center justify-center gap-2 cursor-not-allowed"
+                >
+                  <AlertCircle className="w-4 h-4 text-red-500" />
+                  <span>Cannot Checkout: Remove Out of Stock Items</span>
+                </button>
+                <button
+                  onClick={removeOutOfStockItems}
+                  className="w-full py-2 bg-red-50 hover:bg-red-100 text-red-600 font-bold rounded-xl text-xs transition-colors"
+                >
+                  Remove Out of Stock Items
+                </button>
+              </div>
+            ) : (
+              <Link
+                href="/checkout"
+                className="w-full py-4 bg-[#e63946] hover:bg-[#c1121f] text-white font-bold rounded-xl text-xs uppercase tracking-wider shadow-lg shadow-red-600/30 flex items-center justify-center gap-2 transition-all mt-4"
+              >
+                <span>Proceed to Checkout</span>
+                <ArrowRight className="w-4 h-4" />
+              </Link>
+            )}
 
             <div className="pt-2 flex items-center justify-center gap-2 text-[11px] text-gray-400">
               <ShieldCheck className="w-4 h-4 text-emerald-500" />

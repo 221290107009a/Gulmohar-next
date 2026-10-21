@@ -1,6 +1,334 @@
-import { DUMMY_SLIDERS, DUMMY_CATEGORIES, DUMMY_PRODUCTS, SlideItem, CategoryItem, ProductItem, ProductSizeItem } from '@/data/dummyData';
+import { DUMMY_SLIDERS, DUMMY_PRODUCTS, SlideItem, CategoryItem, ProductItem, ProductSizeItem } from '@/data/dummyData';
 
+export interface OrderPayload {
+  orderId: string;
+  userId?: number;
+  customerId?: number;
+  recipientName: string;
+  phone: string;
+  email: string;
+  address: string;
+  street: string;
+  city: string;
+  state: string;
+  pincode: string;
+  label: string;
+  total: number;
+  subtotal?: number;
+  paymentMethod: string;
+  date?: string;
+  items: Array<{
+    product_id?: number;
+    id?: number;
+    title: string;
+    quantity: number;
+    size?: string;
+    price: number;
+  }>;
+}
+
+export interface RegisterUserPayload {
+  name: string;
+  email: string;
+  phone: string;
+  password: string;
+  referredByCode?: string;
+  referralShareSource?: string;
+}
+
+export interface RegisteredUser {
+  id: number;
+  referralCode: string;
+  accessToken: string;
+  name: string;
+  phone: string;
+}
+
+export type AuthenticatedUser = RegisteredUser;
+
+
+type ApiRecord = Record<string, unknown>;
+
+interface BackendSizeRecord {
+  size?: string;
+  name?: string;
+  qty?: number | string | null;
+  in_stock?: boolean | number | string | null;
+}
+
+interface BackendCategoryRecord {
+  id?: number;
+  slug?: string;
+  name?: string;
+  title?: string;
+  description?: string;
+  image?: string;
+  products_count?: number;
+}
+
+interface BackendProductRecord {
+  id: number;
+  slug?: string;
+  name?: string;
+  translations?: Array<{ name?: string; description?: string }>;
+  price?: number | string | { amount?: number | string };
+  special_price?: number | string | { amount?: number | string } | null;
+  selling_price?: number | string | { amount?: number | string } | null;
+  base_image?: { path?: string };
+  files?: Array<{ path?: string }>;
+  additional_images?: Array<{ path?: string }>;
+  categories?: BackendCategoryRecord[];
+  reviews_avg_rating?: number | string;
+  reviews_count?: number;
+  description?: string;
+  is_featured?: boolean;
+  in_stock?: boolean | number | string | null;
+  size_inventory?: BackendSizeRecord[];
+  variants?: BackendSizeRecord[];
+}
+
+interface BackendSliderRecord {
+  id?: number;
+  image?: string;
+  title?: string;
+  content?: string;
+  action_url?: string;
+}
+
+function asRecord(value: unknown): ApiRecord {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+    ? value as ApiRecord
+    : {};
+}
+
+function parseBackendPrice(value: unknown): number {
+  const rawValue = typeof value === 'object' && value !== null
+    ? (value as { amount?: unknown }).amount
+    : value;
+  return parseFloat(String(rawValue || 0)) || 0;
+}
 const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://127.0.0.1:8000';
+
+export function getProductShareUrl(productId: number, referralCode: string): string {
+  return `${BACKEND_URL}/online-store/product/${encodeURIComponent(String(productId))}/ref/${encodeURIComponent(referralCode)}`;
+}
+
+export function extractProductImages(p: BackendProductRecord): string[] {
+  const images: string[] = [];
+
+  const addPath = (pathVal?: string | null) => {
+    if (!pathVal || typeof pathVal !== 'string') return;
+    const clean = pathVal.trim();
+    if (!clean) return;
+    const full = clean.startsWith('http') || clean.startsWith('/')
+      ? clean
+      : `${BACKEND_URL}/storage/${clean}`;
+    if (!images.includes(full)) {
+      images.push(full);
+    }
+  };
+
+  // 1. Base Image
+  addPath(p.base_image?.path);
+
+  // 2. Additional Images
+  if (Array.isArray(p.additional_images)) {
+    for (const img of p.additional_images) {
+      if (typeof img === 'string') addPath(img);
+      else if (img && typeof img === 'object' && img.path) addPath(img.path);
+    }
+  }
+
+  // 3. Media
+  const anyP = p as any;
+  if (Array.isArray(anyP?.media)) {
+    for (const m of anyP.media) {
+      if (typeof m === 'string') addPath(m);
+      else if (m && typeof m === 'object' && m.path) addPath(m.path);
+    }
+  }
+
+  // 4. Files
+  if (Array.isArray(p.files)) {
+    for (const f of p.files) {
+      if (typeof f === 'string') addPath(f);
+      else if (f && typeof f === 'object' && f.path) addPath(f.path);
+    }
+  }
+
+  // 5. Fallback
+  if (images.length === 0) {
+    const baseImg = p.base_image?.path || p.files?.[0]?.path || p.additional_images?.[0]?.path;
+    const fallbackPath = baseImg
+      ? (baseImg.startsWith('http') || baseImg.startsWith('/') ? baseImg : `${BACKEND_URL}/storage/${baseImg}`)
+      : '/img/products/blackheels.jpg';
+    images.push(fallbackPath);
+  }
+
+  return images;
+}
+
+async function postRegistrationRequest(path: string, body: Record<string, unknown>): Promise<ApiRecord> {
+  let response: Response;
+  try {
+    response = await fetch(`${BACKEND_URL}/api/web-register/${path}`, {
+      method: 'POST',
+      headers: defaultHeaders,
+      cache: 'no-store',
+      body: JSON.stringify(body)
+    });
+  } catch {
+    throw new Error('Cannot connect to Gulmohar backend. Check that Apache is running and gulmohar-backend.test is in the Windows hosts file.');
+  }
+  const result = asRecord(await response.json().catch(() => ({})));
+
+  if (!response.ok || result.success !== true) {
+    if (response.status === 409) {
+      throw new Error('An account with this email already exists. Please sign in instead.');
+    }
+    if (response.status === 422 && path === 'verify-otp') {
+      throw new Error('The verification code is invalid or expired. Please check your email.');
+    }
+    throw new Error('We could not complete registration with the server. Please try again.');
+  }
+
+  return result;
+}
+
+export async function requestRegistrationOtp(email: string): Promise<void> {
+  await postRegistrationRequest('send-otp', { email });
+}
+
+export async function verifyRegistrationOtp(email: string, code: string): Promise<void> {
+  await postRegistrationRequest('verify-otp', { email, code });
+}
+
+export async function loginUserToBackend(email: string, password: string): Promise<AuthenticatedUser> {
+  let response: Response;
+  try {
+    response = await fetch(`${BACKEND_URL}/api/web-login`, {
+      method: 'POST',
+      headers: defaultHeaders,
+      cache: 'no-store',
+      body: JSON.stringify({ email, password })
+    });
+  } catch {
+    throw new Error('Cannot connect to Gulmohar backend. Check that Apache is running and gulmohar-backend.test is in the Windows hosts file.');
+  }
+
+  const result = asRecord(await response.json().catch(() => ({})));
+  if (response.status === 401) {
+    throw new Error('Email or password is incorrect.');
+  }
+  if (!response.ok || result.success !== true) {
+    throw new Error('We could not sign you in. Please try again.');
+  }
+
+  const data = asRecord(result.data);
+  const id = Number(data.user_id);
+  if (!Number.isInteger(id) || id < 1 || typeof data.access_token !== 'string' || typeof data.referral_code !== 'string') {
+    throw new Error('The backend returned an invalid login session. Please try again.');
+  }
+
+  const name = [data.first_name, data.last_name]
+    .filter((part): part is string => typeof part === 'string' && part.length > 0)
+    .join(' ');
+  return {
+    id,
+    name: name || email,
+    phone: typeof data.phone === 'string' ? data.phone : '',
+    referralCode: data.referral_code,
+    accessToken: data.access_token
+  };
+}
+
+export async function revokeWebLoginToken(accessToken: string): Promise<void> {
+  try {
+    await fetch(`${BACKEND_URL}/api/web-logout`, {
+      method: 'POST',
+      headers: { ...defaultHeaders, Authorization: `Bearer ${accessToken}` },
+      cache: 'no-store'
+    });
+  } catch {
+    // Local logout still succeeds when the server cannot be reached.
+  }
+}
+
+async function postWebPasswordRequest(path: string, body: Record<string, string>): Promise<void> {
+  let response: Response;
+  try {
+    response = await fetch(`${BACKEND_URL}/api/web-password/${path}`, {
+      method: 'POST',
+      headers: defaultHeaders,
+      cache: 'no-store',
+      body: JSON.stringify(body)
+    });
+  } catch {
+    throw new Error('Cannot connect to Gulmohar backend. Check that Apache is running and gulmohar-backend.test is in the Windows hosts file.');
+  }
+
+  const result = asRecord(await response.json().catch(() => ({})));
+  if (response.status === 422) {
+    throw new Error('The reset code is invalid or expired, or the password details are invalid.');
+  }
+  if (!response.ok || result.success !== true) {
+    throw new Error('We could not process this password reset. Please try again.');
+  }
+}
+
+export function requestPasswordResetOtp(email: string): Promise<void> {
+  return postWebPasswordRequest('send-otp', { email });
+}
+
+export function verifyPasswordResetOtp(email: string, code: string): Promise<void> {
+  return postWebPasswordRequest('verify-otp', { email, code });
+}
+
+export function resetPasswordWithOtp(email: string, code: string, newPassword: string, confirmation: string): Promise<void> {
+  return postWebPasswordRequest('reset', {
+    email,
+    code,
+    new_password: newPassword,
+    new_password_confirmation: confirmation
+  });
+}
+
+export async function registerUserToBackend(payload: RegisterUserPayload, otpCode: string): Promise<RegisteredUser> {
+  const nameParts = payload.name.trim().split(/\s+/);
+  const firstName = nameParts[0] || 'Customer';
+  const lastName = nameParts.slice(1).join(' ') || firstName;
+  const shareSource = payload.referralShareSource === 'product-share'
+    ? 'store'
+    : payload.referralShareSource === 'account-share'
+      ? 'web'
+      : payload.referralShareSource?.slice(0, 10);
+  const registrationResult = await postRegistrationRequest('complete', {
+    first_name: firstName,
+    last_name: lastName,
+    email: payload.email,
+    phone: payload.phone,
+    password: payload.password,
+    otp_code: otpCode,
+    referrer_code: payload.referredByCode,
+    share_source: shareSource
+  });
+  const registrationData = asRecord(registrationResult.data);
+  const userId = Number(registrationData.user_id);
+  if (!Number.isInteger(userId) || userId < 1
+    || typeof registrationData.referral_code !== 'string'
+    || typeof registrationData.access_token !== 'string') {
+    throw new Error('The server did not return a valid new account. Please retry registration.');
+  }
+
+  return {
+    id: userId,
+    name: payload.name.trim() || payload.email,
+    phone: payload.phone,
+    referralCode: registrationData.referral_code,
+    accessToken: registrationData.access_token
+  };
+}
+
 const API_KEY = process.env.NEXT_PUBLIC_API_KEY || '630febe3-d23c-45j6-8a0e-f432518e35as21';
 
 const defaultHeaders = {
@@ -9,9 +337,9 @@ const defaultHeaders = {
   'accesskey': API_KEY,
 };
 
-function mapBackendSizes(p: any): ProductSizeItem[] {
+function mapBackendSizes(p: BackendProductRecord): ProductSizeItem[] {
   if (Array.isArray(p.size_inventory) && p.size_inventory.length > 0) {
-    return p.size_inventory.map((item: any) => {
+    return p.size_inventory.map((item) => {
       const qtyNum = typeof item.qty === 'number' ? item.qty : (parseInt(String(item.qty || 0), 10) || 0);
       const isStock = item.in_stock !== false && item.in_stock !== 0 && item.in_stock !== '0' && qtyNum > 0;
       return {
@@ -22,11 +350,11 @@ function mapBackendSizes(p: any): ProductSizeItem[] {
     });
   }
   if (Array.isArray(p.variants) && p.variants.length > 0) {
-    return p.variants.map((v: any) => {
-      const qtyNum = typeof v.qty === 'number' ? v.qty : (parseInt(String(v.qty || 0), 10) || 0);
-      const isStock = v.in_stock !== false && v.in_stock !== 0 && v.in_stock !== '0' && qtyNum > 0;
+    return p.variants.map((variant) => {
+      const qtyNum = typeof variant.qty === 'number' ? variant.qty : (parseInt(String(variant.qty || 0), 10) || 0);
+      const isStock = variant.in_stock !== false && variant.in_stock !== 0 && variant.in_stock !== '0' && qtyNum > 0;
       return {
-        size: String(v.name || v.size || '').trim(),
+        size: String(variant.name || variant.size || '').trim(),
         qty: qtyNum,
         in_stock: Boolean(isStock)
       };
@@ -52,9 +380,11 @@ export async function getSliders(): Promise<SlideItem[]> {
     clearTimeout(timeoutId);
 
     if (res.ok) {
-      const json = await res.json();
-      if (json && json.success && Array.isArray(json.data) && json.data.length > 0) {
-        return json.data.map((item: any, index: number) => ({
+      const json = asRecord(await res.json());
+      if (json.success && Array.isArray(json.data) && json.data.length > 0) {
+        return json.data.map((rawItem: unknown, index: number) => {
+          const item = rawItem as BackendSliderRecord;
+          return {
           id: item.id || index + 1,
           image: item.image?.startsWith('http') ? item.image : `${BACKEND_URL}/storage/${item.image || ''}`,
           title: item.title || 'Gulmohar Footwear',
@@ -63,10 +393,11 @@ export async function getSliders(): Promise<SlideItem[]> {
           action_url: item.action_url || '/shop',
           button_text: 'Shop Collection',
           badge: index === 0 ? 'NEW ARRIVALS 2026' : 'FEATURED'
-        }));
+          };
+        });
       }
     }
-  } catch (_err) {
+  } catch {
     // silently fallback
   }
 
@@ -93,7 +424,7 @@ export async function getCategories(forceRefresh = false): Promise<CategoryItem[
     return categoriesInFlight;
   }
 
-  categoriesInFlight = (async () => {
+  const request = (async () => {
     try {
       const res = await fetch(`${BACKEND_URL}/api/online-store-categories`, {
         headers: defaultHeaders,
@@ -101,17 +432,21 @@ export async function getCategories(forceRefresh = false): Promise<CategoryItem[
       });
 
       if (res.ok) {
-        const json = await res.json();
-        const catList = json.categories || json.data || (Array.isArray(json) ? json : []);
+        const response: unknown = await res.json();
+        const json = asRecord(response);
+        const catList = json.categories || json.data || (Array.isArray(response) ? response : []);
         if (Array.isArray(catList) && catList.length > 0) {
-          categoriesCache = catList.map((c: any) => ({
-            id: c.id,
-            slug: c.slug || c.name?.toLowerCase().replace(/\s+/g, '-'),
-            title: c.name || c.title,
-            description: c.description || 'Exclusive Footwear Collection',
-            image: c.image ? (c.image.startsWith('http') ? c.image : `${BACKEND_URL}/storage/${c.image}`) : '/img/men-large.jpg',
-            itemCount: c.products_count || 18
-          }));
+          categoriesCache = catList.map((rawCategory: unknown, index: number) => {
+            const c = rawCategory as BackendCategoryRecord;
+            return {
+              id: c.id || index + 1,
+              slug: c.slug || c.name?.toLowerCase().replace(/\s+/g, '-') || `category-${index + 1}`,
+              title: c.name || c.title || 'Footwear',
+              description: c.description || 'Exclusive Footwear Collection',
+              image: c.image ? (c.image.startsWith('http') ? c.image : `${BACKEND_URL}/storage/${c.image}`) : '/img/men-large.jpg',
+              itemCount: typeof c.products_count === 'number' ? c.products_count : 0
+            };
+          });
           return categoriesCache;
         }
       }
@@ -124,7 +459,8 @@ export async function getCategories(forceRefresh = false): Promise<CategoryItem[
     return categoriesCache || [];
   })();
 
-  return categoriesInFlight;
+  categoriesInFlight = request;
+  return request;
 }
 
 /**
@@ -161,47 +497,55 @@ export async function getProducts(options?: {
       });
 
       if (res.ok) {
-        const json = await res.json();
-        const prodList = json.data?.products || json.products || (Array.isArray(json.data) ? json.data : []);
+        const response: unknown = await res.json();
+        const json = asRecord(response);
+        const data = asRecord(json.data);
+        const prodList = data.products || json.products || (Array.isArray(json.data) ? json.data : []);
         if (Array.isArray(prodList) && prodList.length > 0) {
-          const parsed = prodList.map((p: any) => {
+          const parsed = prodList.map((rawProduct: unknown) => {
+            const p = rawProduct as BackendProductRecord;
             const baseImg = p.base_image?.path || p.files?.[0]?.path || p.additional_images?.[0]?.path;
             const imagePath = baseImg ? (baseImg.startsWith('http') ? baseImg : `${BACKEND_URL}/storage/${baseImg}`) : '/img/products/blackheels.jpg';
 
-            const regPrice = parseFloat(String(typeof p.price === 'object' ? (p.price?.amount || 0) : (p.price || 0))) || 0;
-            const specPrice = p.special_price ? parseFloat(String(typeof p.special_price === 'object' ? (p.special_price?.amount || 0) : (p.special_price || 0))) : 0;
-            const sellPrice = p.selling_price ? parseFloat(String(typeof p.selling_price === 'object' ? (p.selling_price?.amount || 0) : (p.selling_price || 0))) : 0;
+            const regPrice = parseBackendPrice(p.price);
+            const specPrice = p.special_price ? parseBackendPrice(p.special_price) : 0;
 
-            let finalPrice = regPrice;
-            let origPrice = regPrice;
+            const hasSpecialPrice = specPrice > 0 && specPrice < regPrice;
+            const finalPrice = hasSpecialPrice ? specPrice : regPrice;
+            const origPrice = regPrice;
 
-            if (specPrice > 0 && specPrice < regPrice) {
-              finalPrice = specPrice;
-              origPrice = regPrice;
-            } else if (sellPrice > 0 && sellPrice < regPrice) {
-              finalPrice = sellPrice;
-              origPrice = regPrice;
-            }
+            const productCategories = Array.isArray(p.categories) ? p.categories : [];
+            const catObj = productCategories.length > 0 ? productCategories[0] : null;
+            const categoryName = catObj ? (catObj.name || catObj.title || 'Uncategorized') : 'Uncategorized';
+            const categoryIds = productCategories.map(c => Number(c.id)).filter(id => !isNaN(id) && id > 0);
+            const categorySlugs = productCategories.map(c => (c.slug || '').toLowerCase()).filter(Boolean);
 
-            const catObj = Array.isArray(p.categories) && p.categories.length > 0 ? p.categories[0] : null;
-            const categoryName = catObj ? (catObj.name || catObj.title || 'Footwear') : 'Footwear';
+            const sizes = mapBackendSizes(p);
+            const isStockFlag = p.in_stock !== false && p.in_stock !== 0 && p.in_stock !== '0';
+            const in_stock = sizes.length > 0
+              ? isStockFlag && sizes.some(s => s.in_stock && s.qty > 0)
+              : isStockFlag;
 
             const item: ProductItem = {
               id: p.id,
               slug: p.slug || `footwear-${p.id}`,
               title: p.name || p.translations?.[0]?.name || 'Gulmohar Handcrafted Footwear',
-              category_id: catObj ? catObj.id : 1,
+              category_id: catObj?.id ?? (categoryIds[0] || 0),
               category_name: categoryName,
+              category_ids: categoryIds,
+              category_slugs: categorySlugs,
               price: finalPrice,
               original_price: origPrice,
-              rating: p.reviews_avg_rating ? parseFloat(p.reviews_avg_rating) : 4.9,
+              special_price: hasSpecialPrice ? specPrice : null,
+              has_special_price: hasSpecialPrice,
+              rating: p.reviews_avg_rating ? parseFloat(String(p.reviews_avg_rating)) : 4.9,
               review_count: p.reviews_count || 28,
-              images: [imagePath],
+              images: extractProductImages(p),
               description: p.description || p.translations?.[0]?.description || 'Artisan handcrafted footwear with ergonomic comfort sole.',
-              badge: ((specPrice > 0 && specPrice < regPrice) ? 'SALE' : (p.is_featured ? 'HOT' : undefined)) as ProductItem['badge'],
-              in_stock: p.in_stock !== false,
+              badge: (hasSpecialPrice ? 'SALE' : (p.is_featured ? 'HOT' : undefined)) as ProductItem['badge'],
+              in_stock,
               colors: ['#000000', '#D4AF37'],
-              sizes: mapBackendSizes(p),
+              sizes,
               is_featured: Boolean(p.is_featured)
             };
 
@@ -269,46 +613,51 @@ export async function getProductById(idOrSlug: string | number): Promise<Product
       clearTimeout(timeoutId);
 
       if (res.ok) {
-        const json = await res.json();
-        if (json && json.product) {
-          const p = json.product;
+        const json = asRecord(await res.json());
+          if (json.product) {
+            const p = json.product as BackendProductRecord;
           const baseImg = p.base_image?.path || p.files?.[0]?.path;
           const imagePath = baseImg ? (baseImg.startsWith('http') ? baseImg : `${BACKEND_URL}/storage/${baseImg}`) : '/img/products/blackheels.jpg';
 
-          const regPrice = parseFloat(String(typeof p.price === 'object' ? (p.price?.amount || 0) : (p.price || 0))) || 0;
-          const specPrice = p.special_price ? parseFloat(String(typeof p.special_price === 'object' ? (p.special_price?.amount || 0) : (p.special_price || 0))) : 0;
-          const sellPrice = p.selling_price ? parseFloat(String(typeof p.selling_price === 'object' ? (p.selling_price?.amount || 0) : (p.selling_price || 0))) : 0;
+          const regPrice = parseBackendPrice(p.price);
+          const specPrice = p.special_price ? parseBackendPrice(p.special_price) : 0;
 
-          let finalPrice = regPrice;
-          let origPrice = regPrice;
+          const hasSpecialPrice = specPrice > 0 && specPrice < regPrice;
+          const finalPrice = hasSpecialPrice ? specPrice : regPrice;
+          const origPrice = regPrice;
 
-          if (specPrice > 0 && specPrice < regPrice) {
-            finalPrice = specPrice;
-            origPrice = regPrice;
-          } else if (sellPrice > 0 && sellPrice < regPrice) {
-            finalPrice = sellPrice;
-            origPrice = regPrice;
-          }
+          const productCategories = Array.isArray(p.categories) ? p.categories : [];
+          const catObj = productCategories.length > 0 ? productCategories[0] : null;
+          const categoryName = catObj ? (catObj.name || catObj.title || 'Uncategorized') : 'Uncategorized';
+          const categoryIds = productCategories.map(c => Number(c.id)).filter(id => !isNaN(id) && id > 0);
+          const categorySlugs = productCategories.map(c => (c.slug || '').toLowerCase()).filter(Boolean);
 
-          const catObj = Array.isArray(p.categories) && p.categories.length > 0 ? p.categories[0] : null;
-          const categoryName = catObj ? (catObj.name || catObj.title || 'Footwear') : 'Footwear';
+          const sizes = mapBackendSizes(p);
+          const isStockFlag = p.in_stock !== false && p.in_stock !== 0 && p.in_stock !== '0';
+          const in_stock = sizes.length > 0
+            ? isStockFlag && sizes.some(s => s.in_stock && s.qty > 0)
+            : isStockFlag;
 
           const item: ProductItem = {
             id: p.id,
             slug: p.slug || `footwear-${p.id}`,
             title: p.name || p.translations?.[0]?.name || 'Gulmohar Handcrafted Footwear',
-            category_id: catObj ? catObj.id : 1,
+            category_id: catObj?.id ?? (categoryIds[0] || 0),
             category_name: categoryName,
+            category_ids: categoryIds,
+            category_slugs: categorySlugs,
             price: finalPrice,
             original_price: origPrice,
-            rating: p.reviews_avg_rating ? parseFloat(p.reviews_avg_rating) : 4.9,
+            special_price: hasSpecialPrice ? specPrice : null,
+            has_special_price: hasSpecialPrice,
+            rating: p.reviews_avg_rating ? parseFloat(String(p.reviews_avg_rating)) : 4.9,
             review_count: p.reviews_count || 34,
-            images: [imagePath],
+            images: extractProductImages(p),
             description: p.description || p.translations?.[0]?.description || 'Artisan handcrafted footwear with orthopedic memory cushion footbed.',
-            badge: ((specPrice > 0 && specPrice < regPrice) ? 'SALE' : 'HOT') as ProductItem['badge'],
-            in_stock: p.in_stock !== false,
+            badge: (hasSpecialPrice ? 'SALE' : (p.is_featured ? 'HOT' : undefined)) as ProductItem['badge'],
+            in_stock,
             colors: ['#000000', '#D4AF37'],
-            sizes: mapBackendSizes(p),
+            sizes,
             is_featured: Boolean(p.is_featured)
           };
 
@@ -317,7 +666,7 @@ export async function getProductById(idOrSlug: string | number): Promise<Product
           return item;
         }
       }
-    } catch (_err) {
+    } catch {
       // ignore
     } finally {
       delete productDetailInFlight[key];
@@ -374,7 +723,7 @@ export async function saveAddressToBackend(payload: {
 /**
  * Place order to Laravel backend DB (/api/order-place)
  */
-export async function placeOrderToBackend(orderData: any) {
+export async function placeOrderToBackend(orderData: OrderPayload) {
   try {
     const res = await fetch(`${BACKEND_URL}/api/order-place`, {
       method: 'POST',
@@ -388,6 +737,140 @@ export async function placeOrderToBackend(orderData: any) {
     console.error('placeOrderToBackend error:', err);
   }
   return null;
+}
+
+/**
+ * Fetch orders for a user from Laravel backend (/api/orders)
+ */
+export async function getUserOrders(params: { userId?: number; email?: string }): Promise<any[]> {
+  try {
+    const res = await fetch(`${BACKEND_URL}/api/orders`, {
+      method: 'POST',
+      headers: defaultHeaders,
+      body: JSON.stringify({
+        user_id: params.userId,
+        email: params.email
+      })
+    });
+    if (res.ok) {
+      const data = await res.json();
+      if (data.status === 'success' && Array.isArray(data.data)) {
+        return data.data;
+      }
+    }
+  } catch (err) {
+    console.error('getUserOrders error:', err);
+  }
+  return [];
+}
+
+/**
+ * Cancel order in Laravel backend (/api/orders/{id}/cancel) which restores stock
+ */
+export async function cancelOrderInBackend(orderId: number | string): Promise<boolean> {
+  try {
+    const res = await fetch(`${BACKEND_URL}/api/orders/${orderId}/cancel`, {
+      method: 'POST',
+      headers: defaultHeaders
+    });
+    if (res.ok) {
+      const data = await res.json();
+      return data.status === 'success';
+    }
+  } catch (err) {
+    console.error('cancelOrderInBackend error:', err);
+  }
+  return false;
+}
+
+/**
+ * Get single order details from Laravel backend (/api/orders/{id})
+ */
+export async function getOrderDetailInBackend(orderId: number | string): Promise<any | null> {
+  try {
+    const res = await fetch(`${BACKEND_URL}/api/orders/${orderId}`, {
+      method: 'GET',
+      headers: defaultHeaders,
+      cache: 'no-store'
+    });
+    if (res.ok) {
+      const data = await res.json();
+      if (data.status === 'success' && data.data) {
+        return data.data;
+      }
+    }
+  } catch (err) {
+    console.error('getOrderDetailInBackend error:', err);
+  }
+  return null;
+}
+
+/**
+ * Submit product review and rating to Laravel backend (/api/products/{productId}/reviews)
+ */
+export async function submitProductReview(params: {
+  productId: number | string;
+  userId: number | string;
+  reviewerName: string;
+  rating: number;
+  comment: string;
+}): Promise<{ success: boolean; message: string }> {
+  try {
+    const res = await fetch(`${BACKEND_URL}/api/products/${params.productId}/reviews`, {
+      method: 'POST',
+      headers: defaultHeaders,
+      body: JSON.stringify({
+        user_id: params.userId,
+        reviewer_name: params.reviewerName,
+        rating: params.rating,
+        comment: params.comment
+      })
+    });
+    const data = await res.json().catch(() => null);
+    if (res.ok && (data?.success || data?.status === 'success' || data?.data)) {
+      return { success: true, message: data?.message || 'Thank you for your rating and review!' };
+    }
+    return { success: false, message: data?.message || 'Could not submit review. Please try again.' };
+  } catch (err) {
+    console.error('submitProductReview error:', err);
+    return { success: false, message: 'Server connection error.' };
+  }
+}
+
+export interface BackendReviewItem {
+  id: number;
+  reviewer_id?: number | string;
+  reviewer_name?: string;
+  name?: string;
+  rating: number;
+  comment: string;
+  created_at?: string;
+  created_at_formatted?: string;
+}
+
+/**
+ * Fetch product reviews from Laravel backend DB (/api/products/{productId}/reviews)
+ */
+export async function getProductReviews(productId: number | string): Promise<BackendReviewItem[]> {
+  try {
+    const res = await fetch(`${BACKEND_URL}/api/products/${productId}/reviews`, {
+      method: 'GET',
+      headers: defaultHeaders,
+      cache: 'no-store'
+    });
+    if (res.ok) {
+      const json = await res.json();
+      if (Array.isArray(json?.data)) {
+        return json.data;
+      }
+      if (Array.isArray(json)) {
+        return json;
+      }
+    }
+  } catch (err) {
+    console.error('getProductReviews error:', err);
+  }
+  return [];
 }
 
 /**
@@ -463,7 +946,6 @@ export function generateInvoicePDF(order: {
           <tr>
             <td>
               <div class="logo">Gulmohar <span>Footwear</span></div>
-              <div class="tagline">Handcrafted Luxury & Ergonomic Comfort</div>
             </td>
             <td>
               <div class="title-badge">TAX INVOICE</div>
@@ -487,11 +969,11 @@ export function generateInvoicePDF(order: {
             </td>
             <td class="address-card" style="text-align: right;">
               <h4>Seller Details:</h4>
-              <strong>Gulmohar Footwear Pvt Ltd</strong><br />
-              102, Craftsman Plaza, FC Road<br />
-              Mumbai, Maharashtra - 400050<br />
-              GSTIN: 27AABCG1234F1Z9<br />
-              Support: support@gulmoharfootwear.com
+              <strong>Gulmohar Footwear</strong><br />
+              Vadla RTO Road, Bhavnagar<br />
+              Gujarat - 364002, India<br />
+              <strong>Phone:</strong> +91 9898798322 / +91 9429974671<br />
+              <strong>Email:</strong> support@footweargulmohar.com
             </td>
           </tr>
         </table>
@@ -539,7 +1021,7 @@ export function generateInvoicePDF(order: {
         </table>
 
         <div class="footer">
-          <p>Thank you for shopping with Gulmohar Footwear! For warranty or returns visit gulmoharfootwear.com</p>
+          <p>Thank you for shopping with Gulmohar Footwear! (No Warranty & No Return Policy)</p>
           <p>This is a computer-generated tax invoice receipt requiring no physical signature.</p>
         </div>
       </div>

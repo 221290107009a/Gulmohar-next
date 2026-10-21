@@ -5,12 +5,10 @@ import Link from 'next/link';
 import Image from 'next/image';
 import { useRouter } from 'next/navigation';
 import {
-  ShieldCheck,
   Truck,
   CreditCard,
   CheckCircle2,
   ArrowRight,
-  Sparkles,
   Lock,
   Mail,
   MapPin,
@@ -19,19 +17,21 @@ import {
   Briefcase,
   Check,
   Printer,
-  FileText
+  AlertCircle
 } from 'lucide-react';
-import { useCart } from '@/context/CartContext';
+import { useCart, isCartItemInStock } from '@/context/CartContext';
 import { useAuth, SavedAddress } from '@/context/AuthContext';
 import { formatPrice } from '@/lib/utils';
-import { saveAddressToBackend, placeOrderToBackend, generateInvoicePDF } from '@/lib/api';
+import { saveAddressToBackend, placeOrderToBackend, generateInvoicePDF, OrderPayload } from '@/lib/api';
+
+const EMPTY_SAVED_ADDRESSES: SavedAddress[] = [];
 
 export default function CheckoutPage() {
   const router = useRouter();
-  const { items, subtotal, discount, total, clearCart } = useCart();
-  const { user, addAddress } = useAuth();
+  const { items, subtotal, discount, total, clearCart, removeFromCart, hasOutOfStockItems, removeOutOfStockItems } = useCart();
+  const { user, addAddress, isAuthenticated, isAuthReady } = useAuth();
 
-  const savedAddresses = user?.savedAddresses || [];
+  const savedAddresses = user?.savedAddresses ?? EMPTY_SAVED_ADDRESSES;
 
   const [selectedAddressId, setSelectedAddressId] = useState<string>(
     savedAddresses.find(a => a.isDefault)?.id || savedAddresses[0]?.id || 'custom'
@@ -41,11 +41,11 @@ export default function CheckoutPage() {
     firstName: user?.name?.split(' ')[0] || '',
     lastName: user?.name?.split(' ')[1] || '',
     email: user?.email || '',
-    phone: user?.phone || '+91 98765 43210',
-    address: user?.address || 'Flat 402, Royal Residency, Hill Road',
-    city: 'Mumbai',
-    state: 'Maharashtra',
-    pincode: '400050',
+    phone: user?.phone || '',
+    address: user?.address || '',
+    city: '',
+    state: '',
+    pincode: '',
     addressLabel: 'Home',
     saveAddress: true,
     notes: ''
@@ -54,7 +54,14 @@ export default function CheckoutPage() {
   const [paymentMethod, setPaymentMethod] = useState<'cod' | 'online'>('cod');
   const [isOrderPlaced, setIsOrderPlaced] = useState(false);
   const [placedOrderId, setPlacedOrderId] = useState<string>('');
-  const [placedOrderSummary, setPlacedOrderSummary] = useState<any>(null);
+  const [placedOrderSummary, setPlacedOrderSummary] = useState<OrderPayload | null>(null);
+  const [emailSent, setEmailSent] = useState<boolean | null>(null);
+
+  useEffect(() => {
+    if (isAuthReady && !isAuthenticated) {
+      router.replace('/login?returnTo=%2Fcheckout');
+    }
+  }, [isAuthenticated, isAuthReady, router]);
 
   // Synchronize form when selected address card changes
   useEffect(() => {
@@ -62,6 +69,8 @@ export default function CheckoutPage() {
       const found = savedAddresses.find(a => a.id === selectedAddressId);
       if (found) {
         const nameParts = (found.name || user?.name || '').split(' ');
+        // Keep form fields synchronized when the selected saved address changes.
+        // eslint-disable-next-line react-hooks/set-state-in-effect
         setFormData(prev => ({
           ...prev,
           firstName: nameParts[0] || prev.firstName,
@@ -106,8 +115,18 @@ export default function CheckoutPage() {
     }));
   };
 
-  const handlePlaceOrder = (e: React.FormEvent) => {
+  const handlePlaceOrder = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!isAuthenticated || !user) {
+      router.replace('/login?returnTo=%2Fcheckout');
+      return;
+    }
+
+    const outOfStockItems = items.filter(item => !isCartItemInStock(item));
+    if (outOfStockItems.length > 0) {
+      alert(`Cannot place order: Some items in your bag are out of stock (${outOfStockItems.map(i => i.product.title).join(', ')}).\nPlease remove them to proceed.`);
+      return;
+    }
     const newOrderId = `GM-${Math.floor(100000 + Math.random() * 900000)}`;
 
     const fullRecipientName = `${formData.firstName} ${formData.lastName}`.trim() || user?.name || 'Valued Customer';
@@ -127,8 +146,10 @@ export default function CheckoutPage() {
       });
     }
 
-    const orderData = {
+    const orderData: OrderPayload = {
       orderId: newOrderId,
+      userId: user?.id,
+      customerId: user?.id,
       recipientName: fullRecipientName,
       phone: formData.phone,
       email: formData.email,
@@ -139,14 +160,26 @@ export default function CheckoutPage() {
       pincode: formData.pincode,
       label: formData.addressLabel,
       total: total,
+      subtotal: subtotal,
       paymentMethod: paymentMethod === 'cod' ? 'Cash On Delivery' : 'Prepaid Online (Razorpay/UPI)',
+      date: new Date().toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }),
       items: items.map(i => ({
+        product_id: i.product.id,
+        id: i.product.id,
         title: i.product.title,
+        image: i.product.images?.[0] || '',
         quantity: i.quantity,
         size: i.selectedSize,
         price: i.product.price
       }))
     };
+
+    // Clean up any legacy localStorage orders so orders are strictly from DB
+    try {
+      localStorage.removeItem('gulmohar_orders');
+    } catch {
+      // ignore
+    }
 
     // Save address to backend DB
     saveAddressToBackend({
@@ -160,12 +193,14 @@ export default function CheckoutPage() {
       pincode: formData.pincode
     }).catch(console.error);
 
-    placeOrderToBackend(orderData).catch(console.error);
+    // Save directly to Laravel DB
+    await placeOrderToBackend(orderData);
 
     setPlacedOrderId(newOrderId);
     setPlacedOrderSummary(orderData);
     setIsOrderPlaced(true);
 
+    setEmailSent(null);
     fetch('/api/send-email', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -174,10 +209,25 @@ export default function CheckoutPage() {
         type: 'order',
         orderDetails: orderData
       })
-    }).catch(console.error);
+    }).then((response) => {
+      setEmailSent(response.ok);
+    }).catch((error: unknown) => {
+      console.error('Order email request failed:', error);
+      setEmailSent(false);
+    });
 
     clearCart();
   };
+
+  if (!isAuthReady || !isAuthenticated || !user) {
+    return (
+      <div className="max-w-3xl mx-auto py-24 px-4 text-center" role="status">
+        <Lock className="w-8 h-8 text-[#d4af37] mx-auto mb-3" />
+        <p className="text-sm font-semibold text-gray-800">Sign in is required to continue to checkout.</p>
+        <p className="text-xs text-gray-500 mt-1">Redirecting you to sign in...</p>
+      </div>
+    );
+  }
 
   if (isOrderPlaced && placedOrderSummary) {
     return (
@@ -206,9 +256,15 @@ export default function CheckoutPage() {
               <Mail className="w-5 h-5" />
             </div>
             <div>
-              <span className="font-bold text-emerald-900 block">Invoice & Shipment Notice Sent!</span>
+              <span className={`font-bold block ${emailSent === false ? 'text-amber-900' : 'text-emerald-900'}`}>
+                {emailSent === false ? 'Email delivery is unavailable' : emailSent ? 'Invoice & Shipment Notice Sent!' : 'Sending order confirmation...'}
+              </span>
               <p className="text-[11px] text-emerald-700">
-                Official invoice tax receipt and live tracking details have been dispatched to <strong>{placedOrderSummary.email}</strong>.
+                {emailSent === false
+                  ? 'Your order is recorded, but the confirmation email could not be sent. Please contact support if needed.'
+                  : emailSent
+                    ? <>Official invoice and shipment details were sent to <strong>{placedOrderSummary.email}</strong>.</>
+                    : 'Your order confirmation is being sent.'}
               </p>
             </div>
           </div>
@@ -583,8 +639,27 @@ export default function CheckoutPage() {
             </h3>
 
             {/* Items summary list */}
+            {hasOutOfStockItems && (
+              <div className="p-3 bg-red-50 border border-red-200 rounded-xl text-xs text-red-700 space-y-2">
+                <div className="flex items-center gap-1.5 font-bold text-red-800">
+                  <AlertCircle className="w-4 h-4 text-red-600 shrink-0" />
+                  <span>Out of Stock items detected</span>
+                </div>
+                <p>You cannot checkout with out of stock items.</p>
+                <button
+                  type="button"
+                  onClick={removeOutOfStockItems}
+                  className="px-2.5 py-1 bg-red-600 hover:bg-red-700 text-white rounded text-[11px] font-bold transition-colors"
+                >
+                  Remove Out of Stock Items
+                </button>
+              </div>
+            )}
+
             <div className="max-h-64 overflow-y-auto space-y-3 divide-y divide-gray-50">
-              {items.map((item, idx) => (
+              {items.map((item, idx) => {
+                const inStock = isCartItemInStock(item);
+                return (
                 <div key={idx} className="pt-2 flex items-center justify-between gap-3 text-xs">
                   <div className="flex items-center gap-3 min-w-0">
                     <div className="relative w-12 h-12 bg-gray-50 rounded-lg overflow-hidden shrink-0 border">
@@ -593,13 +668,28 @@ export default function CheckoutPage() {
                     <div className="min-w-0">
                       <p className="font-bold text-gray-900 truncate">{item.product.title}</p>
                       <p className="text-gray-400">Qty: {item.quantity} {item.selectedSize ? `| Size: ${item.selectedSize}` : ''}</p>
+                      {!inStock && (
+                        <div className="flex items-center gap-2 mt-0.5">
+                          <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-red-100 text-red-700">
+                            Out of Stock
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => removeFromCart(item.product.id)}
+                            className="text-[10px] text-red-600 underline font-semibold hover:text-red-800"
+                          >
+                            Remove
+                          </button>
+                        </div>
+                      )}
                     </div>
                   </div>
                   <span className="font-bold text-gray-900 shrink-0">
                     {formatPrice(item.product.price * item.quantity)}
                   </span>
                 </div>
-              ))}
+                );
+              })}
             </div>
 
             {/* Calculations */}
@@ -627,10 +717,21 @@ export default function CheckoutPage() {
             {/* Submit Button */}
             <button
               type="submit"
-              className="w-full py-4 bg-[#e63946] hover:bg-[#c1121f] text-white font-bold rounded-xl text-xs uppercase tracking-wider shadow-lg shadow-red-600/30 flex items-center justify-center gap-2 transition-all mt-4"
+              disabled={hasOutOfStockItems}
+              className={`w-full py-4 font-bold rounded-xl text-xs uppercase tracking-wider flex items-center justify-center gap-2 transition-all mt-4 ${
+                hasOutOfStockItems
+                  ? 'bg-gray-300 text-gray-500 cursor-not-allowed shadow-none'
+                  : 'bg-[#e63946] hover:bg-[#c1121f] text-white shadow-lg shadow-red-600/30'
+              }`}
             >
-              <span>Place Order Now</span>
-              <ArrowRight className="w-4 h-4" />
+              {hasOutOfStockItems ? (
+                <span>Cannot Place Order (Items Out of Stock)</span>
+              ) : (
+                <>
+                  <span>Place Order Now</span>
+                  <ArrowRight className="w-4 h-4" />
+                </>
+              )}
             </button>
 
             <div className="pt-2 text-center text-[11px] text-gray-400">

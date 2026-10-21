@@ -1,6 +1,7 @@
 'use client';
 
 import React, { createContext, useContext, useState, useEffect } from 'react';
+import { revokeWebLoginToken } from '@/lib/api';
 
 export interface SavedAddress {
   id: string;
@@ -18,6 +19,10 @@ export interface UserProfile {
   id: number;
   name: string;
   email: string;
+  accessToken?: string;
+  referralCode?: string;
+  referredByCode?: string;
+  referralShareSource?: string;
   phone?: string;
   address?: string;
   savedAddresses?: SavedAddress[];
@@ -26,56 +31,60 @@ export interface UserProfile {
 interface AuthContextType {
   user: UserProfile | null;
   isAuthenticated: boolean;
-  login: (email: string, name?: string) => void;
+  isAuthReady: boolean;
+  login: (email: string, name?: string, options?: {
+    userId?: number;
+    accessToken?: string;
+    phone?: string;
+    referralCode?: string;
+    referredByCode?: string;
+    referralShareSource?: string;
+  }) => void;
   logout: () => void;
   addAddress: (address: Omit<SavedAddress, 'id'>) => SavedAddress;
   removeAddress: (id: string) => void;
   setDefaultAddress: (id: string) => void;
 }
 
-const DEFAULT_SAMPLE_ADDRESSES: SavedAddress[] = [
-  {
-    id: 'addr-1',
-    label: 'Home',
-    name: 'Gulmohar Customer',
-    phone: '+91 98765 43210',
-    street: 'Flat 402, Royal Residency, Hill Road',
-    city: 'Mumbai',
-    state: 'Maharashtra',
-    pincode: '400050',
-    isDefault: true
-  },
-  {
-    id: 'addr-2',
-    label: 'Work',
-    name: 'Gulmohar Customer',
-    phone: '+91 98765 43210',
-    street: 'Suite 12, Corporate Tower, BKC Commercial Complex',
-    city: 'Mumbai',
-    state: 'Maharashtra',
-    pincode: '400051',
-    isDefault: false
-  }
-];
-
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
+
+function createReferralCode(email: string): string {
+  let hash = 2166136261;
+  for (const character of email.trim().toLowerCase()) {
+    hash = Math.imul(hash ^ character.charCodeAt(0), 16777619);
+  }
+  return `GUL${(hash >>> 0).toString(36).toUpperCase().padStart(7, '0')}`;
+}
 
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [user, setUser] = useState<UserProfile | null>(null);
+  const [isAuthReady, setIsAuthReady] = useState(false);
 
   useEffect(() => {
+    const searchParams = new URLSearchParams(window.location.search);
+    const incomingReferralCode = searchParams.get('ref');
+    if (incomingReferralCode) {
+      sessionStorage.setItem('gulmohar_referral_code', incomingReferralCode);
+      const incomingSource = searchParams.get('source');
+      if (incomingSource) sessionStorage.setItem('gulmohar_referral_source', incomingSource);
+    }
+
     const savedUser = localStorage.getItem('gulmohar_user');
     if (savedUser) {
       try {
-        const parsed = JSON.parse(savedUser);
-        if (!parsed.savedAddresses || parsed.savedAddresses.length === 0) {
-          parsed.savedAddresses = DEFAULT_SAMPLE_ADDRESSES;
-        }
+        const parsed = JSON.parse(savedUser) as UserProfile;
+        parsed.referralCode ||= createReferralCode(parsed.email || String(parsed.id));
+        parsed.savedAddresses ||= [];
+        // Restore persisted state after client hydration.
+        // eslint-disable-next-line react-hooks/set-state-in-effect
         setUser(parsed);
-      } catch (e) {
+        localStorage.setItem('gulmohar_user', JSON.stringify(parsed));
+      } catch {
         console.error('Failed to load user');
       }
     }
+    // Mark local session hydration complete before protected routes decide where to send the user.
+    setIsAuthReady(true);
   }, []);
 
   const saveUserToStorage = (updatedUser: UserProfile | null) => {
@@ -87,19 +96,35 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   };
 
-  const login = (email: string, name = 'Customer') => {
+  const login = (email: string, name = 'Customer', options?: {
+    userId?: number;
+    accessToken?: string;
+    phone?: string;
+    referralCode?: string;
+    referredByCode?: string;
+    referralShareSource?: string;
+  }) => {
+    const referralCode = options?.referredByCode || sessionStorage.getItem('gulmohar_referral_code') || undefined;
+    const shareSource = options?.referralShareSource || sessionStorage.getItem('gulmohar_referral_source') || undefined;
     const newUser: UserProfile = {
-      id: Date.now(),
+      id: options?.userId || Date.now(),
       name: name || 'Customer',
       email: email || '',
-      phone: '+91 98765 43210',
-      address: 'Flat 402, Royal Residency, Hill Road, Mumbai 400050',
-      savedAddresses: DEFAULT_SAMPLE_ADDRESSES
+      accessToken: options?.accessToken,
+      referralCode: options?.referralCode || createReferralCode(email),
+      referredByCode: referralCode,
+      referralShareSource: shareSource,
+      phone: options?.phone || '',
+      address: '',
+      savedAddresses: []
     };
     saveUserToStorage(newUser);
   };
 
   const logout = () => {
+    if (user?.accessToken) {
+      void revokeWebLoginToken(user.accessToken);
+    }
     saveUserToStorage(null);
   };
 
@@ -157,7 +182,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     <AuthContext.Provider
       value={{
         user,
-        isAuthenticated: Boolean(user),
+        isAuthenticated: Boolean(user?.accessToken),
+        isAuthReady,
         login,
         logout,
         addAddress,

@@ -4,7 +4,8 @@ import React, { useState, useEffect } from 'react';
 import Link from 'next/link';
 import Image from 'next/image';
 import { useRouter } from 'next/navigation';
-import { Lock, Mail, Phone, ArrowRight, ShieldCheck, RefreshCw, KeyRound, CheckCircle2, ArrowLeft } from 'lucide-react';
+import { Lock, Mail, ArrowRight, ShieldCheck, RefreshCw, KeyRound, CheckCircle2, ArrowLeft } from 'lucide-react';
+import { requestPasswordResetOtp, verifyPasswordResetOtp, resetPasswordWithOtp } from '@/lib/api';
 
 export default function ForgotPasswordPage() {
   const router = useRouter();
@@ -12,124 +13,103 @@ export default function ForgotPasswordPage() {
   const [step, setStep] = useState<'request' | 'otp' | 'reset'>('request');
 
   const [contactInput, setContactInput] = useState('');
-  const [generatedOtp, setGeneratedOtp] = useState<string>('');
   const [enteredOtp, setEnteredOtp] = useState<string>('');
   const [newPassword, setNewPassword] = useState('');
   const [confirmNewPassword, setConfirmNewPassword] = useState('');
 
   const [timer, setTimer] = useState<number>(60);
-  const [canResend, setCanResend] = useState<boolean>(false);
+  const canResend = step === 'otp' && timer === 0;
   const [loading, setLoading] = useState<boolean>(false);
   const [error, setError] = useState<string>('');
   const [successMsg, setSuccessMsg] = useState<string>('');
 
-  // Timer for OTP resend
   useEffect(() => {
     let interval: NodeJS.Timeout;
     if (step === 'otp' && timer > 0) {
       interval = setInterval(() => {
         setTimer((prev) => prev - 1);
       }, 1000);
-    } else if (timer === 0) {
-      setCanResend(true);
     }
     return () => clearInterval(interval);
   }, [step, timer]);
 
-  // Step 1: Request Password Reset OTP
-  const handleRequestOtp = (e: React.FormEvent) => {
+  const handleRequestOtp = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
-
     if (!contactInput.trim()) {
-      setError('Please enter your registered Email or Mobile Number.');
+      setError('Please enter your registered email address.');
       return;
     }
 
     setLoading(true);
-
-    const newOtp = Math.floor(100000 + Math.random() * 900000).toString();
-    setGeneratedOtp(newOtp);
-
-    fetch('/api/send-email', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        to: contactInput || 'customer@example.com',
-        type: 'otp',
-        otp: newOtp,
-        subject: `[Gulmohar Footwear] Password Reset OTP Code: ${newOtp}`
-      })
-    }).catch(console.error);
-
-    setTimeout(() => {
+    try {
+      await requestPasswordResetOtp(contactInput.trim());
       setStep('otp');
       setTimer(60);
-      setCanResend(false);
+      setSuccessMsg(`If an account exists for ${contactInput}, a reset code has been sent.`);
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : 'Unable to send the password reset code.');
+    } finally {
       setLoading(false);
-      setSuccessMsg(`Password Reset OTP sent successfully to ${contactInput}`);
-    }, 800);
+    }
   };
 
-  // Resend OTP
-  const handleResendOtp = () => {
+  const handleResendOtp = async () => {
     if (!canResend) return;
     setError('');
-    const newOtp = Math.floor(100000 + Math.random() * 900000).toString();
-    setGeneratedOtp(newOtp);
-    setTimer(60);
-    setCanResend(false);
-    setSuccessMsg(`A new OTP has been sent to ${contactInput}`);
+    setLoading(true);
+    try {
+      await requestPasswordResetOtp(contactInput.trim());
+      setTimer(60);
+      setSuccessMsg(`If an account exists for ${contactInput}, a new reset code has been sent.`);
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : 'Unable to resend the password reset code.');
+    } finally {
+      setLoading(false);
+    }
   };
 
-  // Step 2: Verify OTP
-  const handleVerifyOtp = (e: React.FormEvent) => {
+  const handleVerifyOtp = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
-
     if (!enteredOtp || enteredOtp.length !== 6) {
       setError('Please enter the complete 6-digit OTP.');
       return;
     }
 
-    if (enteredOtp !== generatedOtp && enteredOtp !== '123456') {
-      setError('Invalid OTP. Please check your SMS/Email or enter test OTP 123456.');
-      return;
-    }
-
     setLoading(true);
-
-    setTimeout(() => {
-      setLoading(false);
+    try {
+      await verifyPasswordResetOtp(contactInput.trim(), enteredOtp);
       setStep('reset');
-      setSuccessMsg('OTP Verified! Please enter your new password.');
-    }, 800);
+      setSuccessMsg('OTP verified. Please enter your new password.');
+    } catch (verificationError) {
+      setError(verificationError instanceof Error ? verificationError.message : 'Unable to verify the reset code.');
+    } finally {
+      setLoading(false);
+    }
   };
 
-  // Step 3: Change/Reset Password
-  const handleResetPassword = (e: React.FormEvent) => {
+  const handleResetPassword = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
-
     if (newPassword.length < 6) {
       setError('Password must be at least 6 characters long.');
       return;
     }
-
     if (newPassword !== confirmNewPassword) {
       setError('Passwords do not match.');
       return;
     }
 
     setLoading(true);
-
-    setTimeout(() => {
-      setLoading(false);
+    try {
+      await resetPasswordWithOtp(contactInput.trim(), enteredOtp, newPassword, confirmNewPassword);
       setSuccessMsg('Password updated successfully! Redirecting to Sign In...');
-      setTimeout(() => {
-        router.push('/login');
-      }, 1500);
-    }, 1200);
+      setTimeout(() => router.push('/login'), 1500);
+    } catch (resetError) {
+      setError(resetError instanceof Error ? resetError.message : 'Unable to update your password.');
+      setLoading(false);
+    }
   };
 
   return (
@@ -147,7 +127,7 @@ export default function ForgotPasswordPage() {
             {step === 'reset' && 'Create New Password'}
           </h1>
           <p className="text-xs text-gray-500">
-            {step === 'request' && 'Enter your registered mobile or email to receive reset code'}
+            {step === 'request' && 'Enter your registered email address to receive a reset code'}
             {step === 'otp' && `Enter 6-digit verification OTP sent to ${contactInput}`}
             {step === 'reset' && 'Set a strong new password for your Gulmohar account'}
           </p>
@@ -165,11 +145,6 @@ export default function ForgotPasswordPage() {
               <CheckCircle2 className="w-4 h-4 text-emerald-600" />
               <span>{successMsg}</span>
             </div>
-            {generatedOtp && step === 'otp' && (
-              <p className="text-[11px] text-emerald-800 font-mono bg-emerald-100/70 px-2 py-1 rounded border border-emerald-200 inline-block mt-1">
-                Demo OTP: <strong>{generatedOtp}</strong> (or enter <strong>123456</strong>)
-              </p>
-            )}
           </div>
         )}
 
@@ -177,17 +152,17 @@ export default function ForgotPasswordPage() {
         {step === 'request' && (
           <form onSubmit={handleRequestOtp} className="space-y-4">
             <div>
-              <label className="block text-xs font-bold text-gray-700 mb-1">Registered Mobile or Email *</label>
+              <label className="block text-xs font-bold text-gray-700 mb-1">Registered Email Address *</label>
               <div className="relative">
                 <input
-                  type="text"
+                  type="email"
                   required
                   value={contactInput}
                   onChange={(e) => setContactInput(e.target.value)}
-                  placeholder="e.g. +91 98987 98322 or name@example.com"
+                  placeholder="name@example.com"
                   className="w-full pl-10 pr-4 py-3 bg-gray-50 border border-gray-200 rounded-xl text-xs outline-none focus:border-[#d4af37]"
                 />
-                <Phone className="w-4 h-4 text-gray-400 absolute left-3.5 top-3.5" />
+                <Mail className="w-4 h-4 text-gray-400 absolute left-3.5 top-3.5" />
               </div>
             </div>
 

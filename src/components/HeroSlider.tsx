@@ -11,7 +11,6 @@ export const HeroSlider: React.FC<{ initialSlides?: SlideItem[] }> = ({ initialS
   const [slides, setSlides] = useState<SlideItem[]>(initialSlides || DUMMY_SLIDERS);
   const [currentIndex, setCurrentIndex] = useState(0);
   const [isPaused, setIsPaused] = useState(false);
-  const [isLoading, setIsLoading] = useState(!initialSlides);
 
   useEffect(() => {
     async function loadBackendSlides() {
@@ -22,8 +21,6 @@ export const HeroSlider: React.FC<{ initialSlides?: SlideItem[] }> = ({ initialS
         }
       } catch (err) {
         console.error('Failed to load slides:', err);
-      } finally {
-        setIsLoading(false);
       }
     }
     loadBackendSlides();

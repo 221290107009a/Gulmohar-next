@@ -11,16 +11,18 @@ import {
   Truck, 
   ShieldAlert, 
   Check, 
-  Sparkles, 
   ArrowRight,
-  AlertCircle
+  AlertCircle,
+  Share2
 } from 'lucide-react';
 import { ProductItem, ProductSizeItem, DUMMY_REVIEWS } from '@/data/dummyData';
-import { getProductById, getProducts } from '@/lib/api';
+import { getProductById, getProducts, getProductShareUrl, getProductReviews, submitProductReview } from '@/lib/api';
 import { useCart } from '@/context/CartContext';
 import { useWishlist } from '@/context/WishlistContext';
-import { formatPrice, calculateDiscount } from '@/lib/utils';
+import { useAuth } from '@/context/AuthContext';
+import { formatPrice, calculateDiscount, stripHtml } from '@/lib/utils';
 import { ProductCard } from '@/components/ProductCard';
+import { QuickViewModal } from '@/components/QuickViewModal';
 
 export default function ProductDetailPage() {
   const params = useParams();
@@ -29,9 +31,11 @@ export default function ProductDetailPage() {
 
   const { addToCart } = useCart();
   const { isInWishlist, toggleWishlist } = useWishlist();
+  const { user } = useAuth();
 
   const [product, setProduct] = useState<ProductItem | null>(null);
   const [relatedProducts, setRelatedProducts] = useState<ProductItem[]>([]);
+  const [quickViewProduct, setQuickViewProduct] = useState<ProductItem | null>(null);
   const [activeImage, setActiveImage] = useState<string>('');
   const [selectedSizeObj, setSelectedSizeObj] = useState<ProductSizeItem | null>(null);
   const [quantity, setQuantity] = useState<number>(1);
@@ -40,17 +44,40 @@ export default function ProductDetailPage() {
   const [reviews, setReviews] = useState(DUMMY_REVIEWS);
   const [newReviewName, setNewReviewName] = useState('');
   const [newReviewComment, setNewReviewComment] = useState('');
+  const [newRating, setNewRating] = useState<number>(5);
+  const [hoverRating, setHoverRating] = useState<number>(0);
+  const [isSubmittingReview, setIsSubmittingReview] = useState<boolean>(false);
+  const [shareFeedback, setShareFeedback] = useState('');
+
+  useEffect(() => {
+    if (user?.name) {
+      setNewReviewName(user.name);
+    }
+  }, [user]);
 
   useEffect(() => {
     let isMounted = true;
     async function loadProductData() {
       // Fetch product detail immediately
-      getProductById(id).then(p => {
+      getProductById(id).then(async p => {
         if (isMounted && p) {
           setProduct(p);
           setActiveImage(p.images[0] || '/img/products/blackheels.jpg');
           const firstInStock = p.sizes?.find(s => s.in_stock && s.qty > 0) || p.sizes?.[0] || null;
           setSelectedSizeObj(firstInStock);
+
+          // Fetch real reviews from DB
+          const dbReviews = await getProductReviews(p.id);
+          if (isMounted && dbReviews && dbReviews.length > 0) {
+            const mapped = dbReviews.map(r => ({
+              id: r.id,
+              name: r.reviewer_name || r.name || 'Verified Customer',
+              rating: Number(r.rating || 5),
+              date: r.created_at_formatted || 'Recently',
+              comment: r.comment
+            }));
+            setReviews([...mapped, ...DUMMY_REVIEWS]);
+          }
         }
       });
 
@@ -83,41 +110,90 @@ export default function ProductDetailPage() {
   }
 
   const isWishlisted = isInWishlist(product.id);
-  const discount = calculateDiscount(product.original_price, product.price);
+  const hasSpecialPrice = Boolean(
+    product.has_special_price ?? (product.special_price && product.special_price < product.original_price)
+  ) || (product.badge === 'SALE' && product.original_price > product.price);
+  const discount = hasSpecialPrice ? calculateDiscount(product.original_price, product.price) : 0;
 
-  const activeSize = selectedSizeObj || product.sizes?.[0];
-  const isSelectedSizeAvailable = activeSize?.in_stock && (activeSize?.qty ?? 0) > 0;
-  const maxStock = activeSize?.qty || 1;
+  const hasSizes = product.sizes && product.sizes.length > 0;
+  const activeSize = selectedSizeObj || product.sizes?.find(s => s.in_stock && s.qty > 0) || product.sizes?.[0];
+  const isSelectedSizeAvailable = product.in_stock !== false && (hasSizes
+    ? Boolean(activeSize?.in_stock && (activeSize?.qty ?? 0) > 0)
+    : true);
+  const maxStock = (hasSizes ? activeSize?.qty : 10) || 1;
 
   const handleAddToCart = () => {
-    if (!isSelectedSizeAvailable) return;
+    if (!isSelectedSizeAvailable) {
+      alert('Selected size or product is currently out of stock.');
+      return;
+    }
     addToCart(product, quantity, product.colors?.[0], activeSize?.size);
     setIsAdded(true);
     setTimeout(() => setIsAdded(false), 2000);
   };
 
   const handleBuyNow = () => {
-    if (!isSelectedSizeAvailable) return;
+    if (!isSelectedSizeAvailable) {
+      alert('Selected size or product is currently out of stock.');
+      return;
+    }
     addToCart(product, quantity, product.colors?.[0], activeSize?.size);
     router.push('/checkout');
   };
 
-  const handleAddReview = (e: React.FormEvent) => {
+  const handleShareProduct = async () => {
+    const shareUrl = user?.referralCode
+      ? getProductShareUrl(product.id, user.referralCode)
+      : `${window.location.origin}/product/${encodeURIComponent(product.slug)}`;
+
+    try {
+      if (navigator.share) {
+        await navigator.share({ title: product.title, text: stripHtml(product.description), url: shareUrl });
+        setShareFeedback('Product link shared.');
+      } else {
+        await navigator.clipboard.writeText(shareUrl);
+        setShareFeedback('Product link copied.');
+      }
+    } catch (error) {
+      if (error instanceof Error && error.name === 'AbortError') return;
+      setShareFeedback('Unable to share the product link from this browser.');
+    }
+  };
+
+  const averageRating = reviews.length > 0
+    ? (reviews.reduce((acc, r) => acc + r.rating, 0) / reviews.length).toFixed(1)
+    : (product.rating ? String(product.rating) : '5.0');
+
+  const handleAddReview = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newReviewName.trim() || !newReviewComment.trim()) return;
-    setReviews([
-      {
-        id: Date.now(),
-        name: newReviewName,
-        rating: 5,
-        date: 'Just now',
-        comment: newReviewComment
-      },
-      ...reviews
-    ]);
-    setNewReviewName('');
-    setNewReviewComment('');
-    alert('Thank you! Your verified customer review has been published.');
+
+    setIsSubmittingReview(true);
+    const res = await submitProductReview({
+      productId: product.id,
+      userId: user?.id || 1,
+      reviewerName: newReviewName.trim(),
+      rating: newRating,
+      comment: newReviewComment.trim()
+    });
+    setIsSubmittingReview(false);
+
+    if (res.success) {
+      setReviews([
+        {
+          id: Date.now(),
+          name: newReviewName.trim(),
+          rating: newRating,
+          date: 'Just now',
+          comment: newReviewComment.trim()
+        },
+        ...reviews
+      ]);
+      setNewReviewComment('');
+      alert('Thank you! Your verified customer review has been saved in the database.');
+    } else {
+      alert(res.message || 'Failed to submit review.');
+    }
   };
 
   return (
@@ -150,7 +226,7 @@ export default function ProductDetailPage() {
               className="object-cover"
               priority
             />
-            {discount > 0 && (
+            {hasSpecialPrice && discount > 0 && (
               <span className="absolute top-4 left-4 px-3 py-1 bg-[#e63946] text-white text-xs font-extrabold rounded-full shadow-md">
                 SAVE {discount}%
               </span>
@@ -204,10 +280,13 @@ export default function ProductDetailPage() {
             <div className="flex items-center gap-3">
               <div className="flex text-amber-400">
                 {[...Array(5)].map((_, i) => (
-                  <Star key={i} className="w-4 h-4 fill-amber-400" />
+                  <Star 
+                    key={i} 
+                    className={`w-4 h-4 ${i < Math.round(Number(averageRating)) ? 'fill-amber-400 text-amber-400' : 'fill-gray-200 text-gray-200'}`} 
+                  />
                 ))}
               </div>
-              <span className="text-xs font-bold text-gray-700">{product.rating} / 5.0</span>
+              <span className="text-xs font-bold text-gray-700">{averageRating} / 5.0</span>
               <span className="text-xs text-gray-400">({reviews.length} Verified Customer Reviews)</span>
             </div>
 
@@ -216,7 +295,7 @@ export default function ProductDetailPage() {
               <span className="text-3xl font-black text-[#e63946]">
                 {formatPrice(product.price)}
               </span>
-              {product.original_price > product.price && (
+              {hasSpecialPrice && discount > 0 && product.original_price > product.price && (
                 <span className="text-lg text-gray-400 line-through">
                   {formatPrice(product.original_price)}
                 </span>
@@ -228,7 +307,7 @@ export default function ProductDetailPage() {
 
             {/* Short Description */}
             <p className="text-sm text-gray-600 leading-relaxed">
-              {product.description}
+              {stripHtml(product.description)}
             </p>
 
             {/* Size Selector with Backend Stock Quantities */}
@@ -357,11 +436,21 @@ export default function ProductDetailPage() {
                 <span>{isWishlisted ? 'Saved in Wishlist' : 'Add to Wishlist'}</span>
               </button>
 
+              <button
+                type="button"
+                onClick={handleShareProduct}
+                className="inline-flex items-center gap-2 text-xs font-bold text-gray-700 hover:text-[#e63946]"
+              >
+                <Share2 className="w-4 h-4" />
+                <span>Share Product</span>
+              </button>
+
               <div className="flex items-center gap-4 text-xs text-gray-500">
                 <span className="flex items-center gap-1"><Truck className="w-3.5 h-3.5 text-[#d4af37]" /> Free Delivery</span>
                 <span className="flex items-center gap-1"><ShieldAlert className="w-3.5 h-3.5 text-amber-500" /> Non-Returnable</span>
               </div>
             </div>
+            {shareFeedback && <p role="status" className="text-xs text-gray-500">{shareFeedback}</p>}
 
           </div>
 
@@ -408,15 +497,16 @@ export default function ProductDetailPage() {
         {/* Tab Contents */}
         <div className="py-8">
           {activeTab === 'desc' && (
-            <div className="space-y-4 max-w-3xl text-sm text-gray-600 leading-relaxed">
-              <h3 className="font-bold text-gray-900 text-base">Handcrafted Construction & Fit</h3>
-              <p>{product.description}</p>
-              <ul className="list-disc pl-5 space-y-1 text-xs text-gray-600 pt-2">
-                <li><strong>Upper:</strong> 100% Genuine Full-Grain Artisan Leather / High-Knit Mesh.</li>
-                <li><strong>Insole:</strong> Ergonomic Orthopedic Arch Support with high-density Memory Foam.</li>
-                <li><strong>Outsole:</strong> Anti-Slip Thermoplastic Rubber (TPR) with grip lugs for stability.</li>
-                <li><strong>Care:</strong> Clean with natural leather balm or damp micro-fiber cloth.</li>
-              </ul>
+            <div className="space-y-4 max-w-3xl text-sm text-gray-700 leading-relaxed">
+              <h3 className="font-bold text-gray-900 text-base">Footwear Specifications & Details</h3>
+              {product.description ? (
+                <div
+                  className="space-y-2 text-sm text-gray-700 leading-relaxed [&_ul]:list-disc [&_ul]:pl-5 [&_ul]:my-2.5 [&_ul]:space-y-1 [&_ol]:list-decimal [&_ol]:pl-5 [&_ol]:my-2.5 [&_ol]:space-y-1 [&_li]:text-gray-700 [&_strong]:font-bold [&_strong]:text-gray-900 [&_p]:mb-2.5 [&_p:last-child]:mb-0 [&_h1]:text-xl [&_h2]:text-lg [&_h3]:text-base [&_h1]:font-bold [&_h2]:font-bold [&_h3]:font-bold"
+                  dangerouslySetInnerHTML={{ __html: product.description }}
+                />
+              ) : (
+                <p className="text-gray-400 italic">No description provided for this product.</p>
+              )}
             </div>
           )}
 
@@ -435,11 +525,29 @@ export default function ProductDetailPage() {
                     placeholder="Your Full Name"
                     className="p-3 bg-white border border-gray-200 rounded-xl text-xs outline-none focus:border-[#e63946]"
                   />
-                  <div className="flex items-center gap-2 text-amber-400 p-2">
-                    <span>Rating:</span>
-                    {[...Array(5)].map((_, i) => (
-                      <Star key={i} className="w-4 h-4 fill-amber-400 cursor-pointer" />
+                  <div className="flex items-center gap-1.5 p-2 bg-white border border-gray-200 rounded-xl">
+                    <span className="text-xs font-bold text-gray-700 mr-1">Rating:</span>
+                    {[1, 2, 3, 4, 5].map((star) => (
+                      <button
+                        key={star}
+                        type="button"
+                        onMouseEnter={() => setHoverRating(star)}
+                        onMouseLeave={() => setHoverRating(0)}
+                        onClick={() => setNewRating(star)}
+                        className="p-0.5 transition-transform hover:scale-120 focus:outline-hidden"
+                      >
+                        <Star
+                          className={`w-4 h-4 transition-colors ${
+                            (hoverRating || newRating) >= star
+                              ? 'fill-amber-400 text-amber-400'
+                              : 'fill-gray-100 text-gray-300'
+                          }`}
+                        />
+                      </button>
                     ))}
+                    <span className="text-xs font-bold text-gray-700 ml-1">
+                      {newRating} / 5
+                    </span>
                   </div>
                 </div>
                 <textarea
@@ -452,9 +560,10 @@ export default function ProductDetailPage() {
                 />
                 <button
                   type="submit"
-                  className="px-6 py-2.5 bg-[#e63946] hover:bg-[#c1121f] text-white text-xs font-bold rounded-xl shadow-md"
+                  disabled={isSubmittingReview}
+                  className="px-6 py-2.5 bg-[#e63946] hover:bg-[#c1121f] text-white text-xs font-bold rounded-xl shadow-md disabled:opacity-50"
                 >
-                  Submit Review
+                  {isSubmittingReview ? 'Submitting Review...' : 'Submit Review'}
                 </button>
               </form>
 
@@ -499,11 +608,21 @@ export default function ProductDetailPage() {
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-6">
             {relatedProducts.map((p) => (
-              <ProductCard key={p.id} product={p} />
+              <ProductCard
+                key={p.id}
+                product={p}
+                onQuickView={(prod) => setQuickViewProduct(prod)}
+              />
             ))}
           </div>
         </div>
       )}
+
+      {/* QUICK VIEW POPUP MODAL */}
+      <QuickViewModal
+        product={quickViewProduct}
+        onClose={() => setQuickViewProduct(null)}
+      />
 
     </div>
   );

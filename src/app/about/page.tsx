@@ -3,7 +3,7 @@
 import React from 'react';
 import Image from 'next/image';
 import Link from 'next/link';
-import { Award, ShieldCheck, Heart, Sparkles, Truck, Users, ArrowRight } from 'lucide-react';
+import { Award, ShieldCheck, Sparkles, Truck, Users, ArrowRight } from 'lucide-react';
 
 export default function AboutPage() {
   return (

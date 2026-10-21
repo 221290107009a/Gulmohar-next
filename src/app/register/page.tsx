@@ -6,6 +6,7 @@ import Image from 'next/image';
 import { useRouter } from 'next/navigation';
 import { Lock, Mail, User, Phone, ArrowRight, ShieldCheck, RefreshCw, KeyRound, CheckCircle2 } from 'lucide-react';
 import { useAuth } from '@/context/AuthContext';
+import { registerUserToBackend, requestRegistrationOtp, verifyRegistrationOtp } from '@/lib/api';
 
 export default function RegisterPage() {
   const router = useRouter();
@@ -21,10 +22,9 @@ export default function RegisterPage() {
     confirmPassword: ''
   });
 
-  const [generatedOtp, setGeneratedOtp] = useState<string>('');
   const [enteredOtp, setEnteredOtp] = useState<string>('');
   const [timer, setTimer] = useState<number>(60);
-  const [canResend, setCanResend] = useState<boolean>(false);
+  const canResend = step === 'otp' && timer === 0;
   const [loading, setLoading] = useState<boolean>(false);
   const [error, setError] = useState<string>('');
   const [successMsg, setSuccessMsg] = useState<string>('');
@@ -36,19 +36,21 @@ export default function RegisterPage() {
       interval = setInterval(() => {
         setTimer((prev) => prev - 1);
       }, 1000);
-    } else if (timer === 0) {
-      setCanResend(true);
     }
     return () => clearInterval(interval);
   }, [step, timer]);
 
   // Step 1: Trigger OTP Generation
-  const handleSendOtp = (e: React.FormEvent) => {
+  const handleSendOtp = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
 
     if (formData.password !== formData.confirmPassword) {
       setError('Passwords do not match.');
+      return;
+    }
+    if (formData.password.length < 6) {
+      setError('Password must be at least 6 characters long.');
       return;
     }
     if (!formData.phone || formData.phone.length < 10) {
@@ -57,43 +59,36 @@ export default function RegisterPage() {
     }
 
     setLoading(true);
-
-    // Generate OTP & Trigger Email API
-    const newOtp = Math.floor(100000 + Math.random() * 900000).toString();
-    setGeneratedOtp(newOtp);
-
-    fetch('/api/send-email', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        to: formData.email || 'customer@example.com',
-        type: 'otp',
-        otp: newOtp
-      })
-    }).catch(console.error);
-
-    setTimeout(() => {
+    try {
+      await requestRegistrationOtp(formData.email);
       setStep('otp');
       setTimer(60);
-      setCanResend(false);
+      setSuccessMsg(`Verification OTP sent successfully to ${formData.email}`);
+    } catch (otpError) {
+      setError(otpError instanceof Error ? otpError.message : 'Unable to send the verification code.');
+    } finally {
       setLoading(false);
-      setSuccessMsg(`Verification OTP sent successfully to ${formData.email || 'customer@example.com'}`);
-    }, 800);
+    }
   };
 
   // Resend OTP
-  const handleResendOtp = () => {
+  const handleResendOtp = async () => {
     if (!canResend) return;
     setError('');
-    const newOtp = Math.floor(100000 + Math.random() * 900000).toString();
-    setGeneratedOtp(newOtp);
-    setTimer(60);
-    setCanResend(false);
-    setSuccessMsg(`A new OTP has been sent to ${formData.phone}`);
+    setLoading(true);
+    try {
+      await requestRegistrationOtp(formData.email);
+      setTimer(60);
+      setSuccessMsg(`A new verification code has been sent to ${formData.email}`);
+    } catch (otpError) {
+      setError(otpError instanceof Error ? otpError.message : 'Unable to resend the verification code.');
+    } finally {
+      setLoading(false);
+    }
   };
 
   // Step 2: Verify OTP & Complete Registration
-  const handleVerifyOtp = (e: React.FormEvent) => {
+  const handleVerifyOtp = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
 
@@ -102,18 +97,41 @@ export default function RegisterPage() {
       return;
     }
 
-    // Check entered OTP against generated OTP (or test OTP 123456)
-    if (enteredOtp !== generatedOtp && enteredOtp !== '123456') {
-      setError('Invalid OTP entered. Please check your SMS or try 123456.');
-      return;
-    }
-
     setLoading(true);
+    const searchParams = new URLSearchParams(window.location.search);
+    const referredByCode = searchParams.get('ref')
+      || sessionStorage.getItem('gulmohar_referral_code')
+      || undefined;
+    const referralShareSource = searchParams.get('source')
+      || sessionStorage.getItem('gulmohar_referral_source')
+      || undefined;
 
-    setTimeout(() => {
-      login(formData.email, formData.name);
+    try {
+      await verifyRegistrationOtp(formData.email, enteredOtp);
+      const registeredUser = await registerUserToBackend({
+        name: formData.name,
+        email: formData.email,
+        phone: formData.phone,
+        password: formData.password,
+        referredByCode,
+        referralShareSource
+      }, enteredOtp);
+
+      login(formData.email, formData.name, {
+        userId: registeredUser.id,
+        accessToken: registeredUser.accessToken,
+        phone: formData.phone,
+        referralCode: registeredUser.referralCode,
+        referredByCode,
+        referralShareSource
+      });
+      sessionStorage.removeItem('gulmohar_referral_code');
+      sessionStorage.removeItem('gulmohar_referral_source');
       router.push('/account');
-    }, 1200);
+    } catch (registrationError) {
+      setError(registrationError instanceof Error ? registrationError.message : 'We could not complete your registration. Please try again.');
+      setLoading(false);
+    }
   };
 
   return (
@@ -147,11 +165,6 @@ export default function RegisterPage() {
               <CheckCircle2 className="w-4 h-4 text-emerald-600" />
               <span>{successMsg}</span>
             </div>
-            {generatedOtp && (
-              <p className="text-[11px] text-emerald-800 font-mono bg-emerald-100/70 px-2 py-1 rounded border border-emerald-200 inline-block mt-1">
-                Demo OTP: <strong>{generatedOtp}</strong> (or enter <strong>123456</strong>)
-              </p>
-            )}
           </div>
         )}
 
@@ -289,6 +302,7 @@ export default function RegisterPage() {
                   <button
                     type="button"
                     onClick={handleResendOtp}
+                    disabled={loading}
                     className="text-[#e63946] font-bold hover:underline"
                   >
                     Resend OTP

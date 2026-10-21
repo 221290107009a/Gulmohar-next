@@ -30,8 +30,12 @@ export interface ProductItem {
   title: string;
   category_id: number;
   category_name: string;
+  category_ids?: number[];
+  category_slugs?: string[];
   price: number;
   original_price: number;
+  special_price?: number | null;
+  has_special_price?: boolean;
   rating: number;
   review_count: number;
   images: string[];

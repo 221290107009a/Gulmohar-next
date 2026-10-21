@@ -1,7 +1,7 @@
 'use client';
 
 import React from 'react';
-import { Truck, ShieldCheck, Award, Headphones, ShieldAlert } from 'lucide-react';
+import { Truck, Award, Headphones, ShieldAlert } from 'lucide-react';
 
 export const FeaturesBar: React.FC = () => {
   const features = [

@@ -1,3 +1,4 @@
+/* eslint @typescript-eslint/no-require-imports: "off" */
 const nodemailer = require('nodemailer');
 
 async function main() {

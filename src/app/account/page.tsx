@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { 
@@ -9,24 +9,176 @@ import {
   MapPin, 
   Heart, 
   LogOut, 
-  ShieldCheck, 
-  Clock, 
-  CheckCircle2,
   ChevronRight,
-  ExternalLink
+  ExternalLink,
+  Share2
 } from 'lucide-react';
 import { useAuth } from '@/context/AuthContext';
 import { useWishlist } from '@/context/WishlistContext';
 import { formatPrice } from '@/lib/utils';
+import { generateInvoicePDF, getUserOrders, cancelOrderInBackend, OrderPayload } from '@/lib/api';
+
+interface OrderHistoryItem {
+  id: string;
+  orderId?: string;
+  date: string;
+  statusColor: string;
+  status: string;
+  items: string;
+  total: number;
+  rawOrder?: OrderPayload;
+}
 
 export default function AccountPage() {
   const router = useRouter();
-  const { user, isAuthenticated, logout, setDefaultAddress, removeAddress } = useAuth();
+  const { user, isAuthenticated, isAuthReady, logout, setDefaultAddress, removeAddress } = useAuth();
   const { wishlist } = useWishlist();
   const [activeTab, setActiveTab] = useState<'orders' | 'profile' | 'addresses'>('orders');
+  const [referralFeedback, setReferralFeedback] = useState('');
+  const [orders, setOrders] = useState<OrderHistoryItem[]>([]);
+  const [loadingOrders, setLoadingOrders] = useState(true);
+  const [cancelingOrderId, setCancelingOrderId] = useState<string | null>(null);
 
-  const orders: any[] = [];
+  const fetchOrdersFromDb = async () => {
+    setLoadingOrders(true);
+
+    // Clean up any legacy localStorage orders so data is strictly from DB
+    try {
+      localStorage.removeItem('gulmohar_orders');
+    } catch {
+      // ignore
+    }
+
+    let backendOrders: any[] = [];
+    try {
+      if (user?.id || user?.email) {
+        backendOrders = await getUserOrders({ userId: user?.id, email: user?.email });
+      }
+    } catch (err) {
+      console.error('Error fetching backend orders:', err);
+    }
+
+    const formatted: OrderHistoryItem[] = backendOrders.map(bo => {
+      const orderCode = `Order #${bo.id}`;
+      let itemNames = '';
+      let parsedItems: any[] = [];
+
+      if (bo.note) {
+        try {
+          const noteObj = JSON.parse(bo.note);
+          if (noteObj && typeof noteObj === 'object') {
+            if (Array.isArray(noteObj.items) && noteObj.items.length > 0) {
+              parsedItems = noteObj.items;
+              itemNames = noteObj.items.map((i: any) => `${i.title} (${i.size ? `Size: ${i.size}, ` : ''}Qty: ${i.quantity})`).join(', ');
+            }
+          }
+        } catch {
+          // ignore
+        }
+      }
+
+      if (!itemNames) {
+        itemNames = Array.isArray(bo.products) && bo.products.length > 0
+          ? bo.products.map((p: any) => `${p.product?.name || p.name || 'Footwear'} (Qty: ${p.qty})`).join(', ')
+          : 'Gulmohar Footwear Order';
+      }
+
+      const statusMap: Record<string, { label: string; color: string }> = {
+        completed: { label: 'Delivered', color: 'bg-emerald-100 text-emerald-800' },
+        processing: { label: 'Processing Order', color: 'bg-blue-100 text-blue-800' },
+        pending: { label: 'Order Placed (Pending Dispatch)', color: 'bg-amber-100 text-amber-800' },
+        pending_payment: { label: 'Pending Payment', color: 'bg-amber-100 text-amber-800' },
+        on_hold: { label: 'On Hold', color: 'bg-orange-100 text-orange-800' },
+        canceled: { label: 'Canceled', color: 'bg-red-100 text-red-800' },
+        refunded: { label: 'Refunded', color: 'bg-purple-100 text-purple-800' }
+      };
+
+      const fallbackLabel = (bo.status || 'Order Placed').replace(/_/g, ' ').replace(/\b\w/g, (l: string) => l.toUpperCase());
+      const st = statusMap[bo.status] || { label: fallbackLabel, color: 'bg-amber-100 text-amber-800' };
+
+      const raw: OrderPayload = {
+        orderId: orderCode,
+        recipientName: `${bo.billing_first_name || ''} ${bo.billing_last_name || ''}`.trim() || user?.name || 'Customer',
+        phone: bo.customer_phone || user?.phone || '',
+        email: bo.customer_email || user?.email || '',
+        address: bo.billing_address_1 || '',
+        street: bo.billing_address_1 || '',
+        city: bo.billing_city || '',
+        state: bo.billing_state || '',
+        pincode: bo.billing_zip || '',
+        label: 'Delivery Address',
+        total: parseFloat(bo.total?.amount || bo.total || 0),
+        paymentMethod: bo.payment_method === 'cod' ? 'Cash On Delivery' : 'Prepaid Online',
+        date: bo.created_at ? new Date(bo.created_at).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }) : 'Recent',
+        items: parsedItems.length > 0
+          ? parsedItems
+          : (Array.isArray(bo.products) ? bo.products.map((p: any) => ({
+              title: p.product?.name || p.name || 'Footwear',
+              quantity: p.qty,
+              price: parseFloat(p.unit_price?.amount || p.unit_price || 0)
+            })) : [])
+      };
+
+      return {
+        id: String(bo.id),
+        orderId: orderCode,
+        date: bo.created_at ? new Date(bo.created_at).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }) : 'Recent',
+        status: st.label,
+        statusColor: st.color,
+        items: itemNames,
+        total: parseFloat(bo.total?.amount || bo.total || 0),
+        rawOrder: raw
+      };
+    });
+
+    setOrders(formatted);
+    setLoadingOrders(false);
+  };
+
+  useEffect(() => {
+    if (!isAuthReady) return;
+    fetchOrdersFromDb();
+  }, [user, isAuthReady]);
+
+  const handleCancelOrder = async (orderId: string, orderCode?: string) => {
+    setCancelingOrderId(orderId);
+    try {
+      const success = await cancelOrderInBackend(orderId);
+      if (success) {
+        fetchOrdersFromDb();
+      }
+    } catch (e) {
+      console.error('Cancel order error:', e);
+    } finally {
+      setCancelingOrderId(null);
+    }
+  };
+
   const savedAddresses = user?.savedAddresses || [];
+
+  const handleShareReferral = async () => {
+    if (!user?.referralCode) return;
+    const referralUrl = new URL('/register', window.location.origin);
+    referralUrl.searchParams.set('ref', user.referralCode);
+    referralUrl.searchParams.set('source', 'account-share');
+
+    try {
+      if (navigator.share) {
+        await navigator.share({
+          title: 'Join Gulmohar Footwear',
+          text: `Join Gulmohar Footwear with my referral code ${user.referralCode}.`,
+          url: referralUrl.toString()
+        });
+        setReferralFeedback('Referral link shared.');
+      } else {
+        await navigator.clipboard.writeText(referralUrl.toString());
+        setReferralFeedback('Referral link copied.');
+      }
+    } catch (error) {
+      if (error instanceof Error && error.name === 'AbortError') return;
+      setReferralFeedback('Unable to share the referral link from this browser.');
+    }
+  };
 
   if (!isAuthenticated) {
     return (
@@ -138,7 +290,12 @@ export default function AccountPage() {
                 Recent Orders
               </h2>
 
-              {orders.length === 0 ? (
+              {loadingOrders ? (
+                <div className="py-12 text-center space-y-3">
+                  <div className="w-8 h-8 border-2 border-[#e63946] border-t-transparent rounded-full animate-spin mx-auto"></div>
+                  <p className="text-xs text-gray-500">Retrieving your order records...</p>
+                </div>
+              ) : orders.length === 0 ? (
                 <div className="py-12 text-center space-y-3">
                   <Package className="w-12 h-12 text-gray-300 mx-auto" />
                   <h3 className="text-base font-bold text-gray-800">No Orders Placed Yet</h3>
@@ -157,29 +314,55 @@ export default function AccountPage() {
               ) : (
                 <div className="space-y-4">
                   {orders.map((order) => (
-                    <div key={order.id} className="p-4 rounded-2xl border border-gray-100 bg-gray-50/50 space-y-3">
+                    <div key={order.id} className="p-4 rounded-2xl border border-gray-100 bg-gray-50/50 space-y-3 shadow-xs hover:border-[#d4af37]/30 transition-all">
                       <div className="flex flex-wrap items-center justify-between gap-2">
-                        <div className="flex items-center gap-2">
-                          <span className="font-mono font-bold text-xs text-gray-900">{order.id}</span>
+                        <Link href={`/account/orders/${order.id}`} className="flex items-center gap-2 group">
+                          <span className="font-mono font-bold text-xs text-gray-900 group-hover:text-[#e63946] transition-colors">{order.orderId || order.id}</span>
                           <span className="text-[11px] text-gray-400">• {order.date}</span>
-                        </div>
+                        </Link>
                         <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-extrabold uppercase tracking-wider ${order.statusColor}`}>
                           {order.status}
                         </span>
                       </div>
 
-                      <p className="text-xs text-gray-700 font-medium">
-                        {order.items}
-                      </p>
+                      <Link href={`/account/orders/${order.id}`} className="block group">
+                        <p className="text-xs text-gray-700 font-medium group-hover:text-gray-900 transition-colors">
+                          {order.items}
+                        </p>
+                      </Link>
 
                       <div className="flex justify-between items-center pt-2 border-t border-gray-200 text-xs">
                         <span className="text-gray-500">Order Value: <strong className="text-gray-900">{formatPrice(order.total)}</strong></span>
-                        <button 
-                          onClick={() => alert(`Invoice for ${order.id} will be downloaded.`)}
-                          className="text-[#e63946] font-bold hover:underline"
-                        >
-                          Download Invoice
-                        </button>
+                        <div className="flex items-center gap-3">
+                          <Link
+                            href={`/account/orders/${order.id}`}
+                            className="text-gray-700 hover:text-black font-bold hover:underline transition-colors flex items-center gap-1"
+                          >
+                            View Details <ChevronRight className="w-3.5 h-3.5" />
+                          </Link>
+                          <button 
+                            onClick={() => {
+                              if (order.rawOrder) {
+                                generateInvoicePDF(order.rawOrder);
+                              } else {
+                                generateInvoicePDF({
+                                  orderId: order.id,
+                                  recipientName: user?.name || 'Customer',
+                                  phone: user?.phone || '',
+                                  email: user?.email || '',
+                                  address: user?.address || 'Customer Address',
+                                  total: order.total,
+                                  paymentMethod: 'Cash On Delivery',
+                                  date: order.date,
+                                  items: [{ title: order.items, quantity: 1, price: order.total }]
+                                });
+                              }
+                            }}
+                            className="text-[#e63946] hover:text-[#c1121f] font-bold hover:underline transition-colors flex items-center gap-1"
+                          >
+                            Download Tax Invoice
+                          </button>
+                        </div>
                       </div>
                     </div>
                   ))}
@@ -211,6 +394,21 @@ export default function AccountPage() {
                   <span className="text-gray-400 block mb-1">Default Address</span>
                   <strong className="text-gray-900">{user?.address}</strong>
                 </div>
+              </div>
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-t border-gray-100 pt-4">
+                <div>
+                  <span className="text-gray-400 block mb-1 text-xs">Your referral code</span>
+                  <strong className="font-mono text-sm tracking-wider text-gray-900">{user?.referralCode}</strong>
+                </div>
+                <button
+                  type="button"
+                  onClick={handleShareReferral}
+                  className="inline-flex items-center justify-center gap-2 px-4 py-2.5 bg-[#e63946] text-white text-xs font-bold rounded-xl hover:bg-[#c1121f]"
+                >
+                  <Share2 className="w-4 h-4" />
+                  Share referral link
+                </button>
+                {referralFeedback && <span role="status" className="text-xs text-gray-500">{referralFeedback}</span>}
               </div>
             </div>
           )}

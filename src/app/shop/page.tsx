@@ -2,11 +2,12 @@
 
 import React, { useState, useEffect, Suspense } from 'react';
 import { useSearchParams } from 'next/navigation';
+import Link from 'next/link';
 import { Filter, ArrowUpDown, Sparkles } from 'lucide-react';
 import { ProductCard } from '@/components/ProductCard';
 import { QuickViewModal } from '@/components/QuickViewModal';
 import { ProductSkeletonGrid } from '@/components/ProductSkeletonGrid';
-import { ProductItem, CategoryItem, DUMMY_PRODUCTS, DUMMY_CATEGORIES } from '@/data/dummyData';
+import { ProductItem, CategoryItem } from '@/data/dummyData';
 import { getProducts, getCategories } from '@/lib/api';
 import { useWishlist } from '@/context/WishlistContext';
 
@@ -54,6 +55,8 @@ function ShopContent() {
   }, []);
 
   useEffect(() => {
+    // URL navigation must update the interactive filters without remounting the page.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     if (initialCategory) setSelectedCategory(initialCategory);
     if (initialQuery) setSearchQuery(initialQuery);
   }, [initialCategory, initialQuery]);
@@ -61,39 +64,46 @@ function ShopContent() {
   // Filter products
   let filtered = isWishlistFilter ? [...wishlist] : [...products];
 
-  if (isSaleFilter) {
-    filtered = filtered.filter(p => p.badge === 'SALE' || p.original_price > p.price);
-  }
+  if (!isWishlistFilter) {
+    if (isSaleFilter) {
+      filtered = filtered.filter(p => p.badge === 'SALE' || p.original_price > p.price);
+    }
 
-  if (selectedCategory !== 'all') {
-    const cat = selectedCategory.toLowerCase();
-    filtered = filtered.filter(p => {
-      const matchCat = p.category_name.toLowerCase();
-      if (cat === 'men-footwear' || cat === 'men') return matchCat.includes('men');
-      if (cat === 'women-footwear' || cat === 'women') return matchCat.includes('women');
-      if (cat === 'kids-footwear' || cat === 'kids') return matchCat.includes('kid');
-      if (cat === 'ethnic-footwear' || cat === 'ethnic') return matchCat.includes('ethnic') || matchCat.includes('artisan');
-      return true;
-    });
-  }
+    if (selectedCategory !== 'all') {
+      const cat = selectedCategory.toLowerCase();
+      filtered = filtered.filter(p => {
+        if (p.category_slugs && p.category_slugs.includes(cat)) return true;
+        if (p.category_name.toLowerCase() === cat) return true;
+        const matchingCatObj = categories.find(c => c.slug.toLowerCase() === cat || String(c.id) === cat);
+        if (matchingCatObj && (p.category_id === matchingCatObj.id || p.category_ids?.includes(matchingCatObj.id))) return true;
 
-  if (searchQuery.trim()) {
-    const q = searchQuery.toLowerCase();
-    filtered = filtered.filter(p =>
-      p.title.toLowerCase().includes(q) ||
-      p.description.toLowerCase().includes(q) ||
-      p.category_name.toLowerCase().includes(q)
-    );
-  }
+        const matchCat = p.category_name.toLowerCase();
+        if (cat === 'men-footwear' || cat === 'men') return matchCat.includes('men');
+        if (cat === 'women-footwear' || cat === 'women') return matchCat.includes('women');
+        if (cat === 'kids-footwear' || cat === 'kids') return matchCat.includes('kid');
+        if (cat === 'ethnic-footwear' || cat === 'ethnic') return matchCat.includes('ethnic') || matchCat.includes('artisan');
+        return false;
+      });
+    }
 
-  filtered = filtered.filter(p => p.price <= priceRange);
+    if (searchQuery.trim()) {
+      const q = searchQuery.toLowerCase();
+      filtered = filtered.filter(p =>
+        p.title.toLowerCase().includes(q) ||
+        p.description.toLowerCase().includes(q) ||
+        p.category_name.toLowerCase().includes(q)
+      );
+    }
 
-  if (selectedSize !== 'all') {
-    filtered = filtered.filter(p => p.sizes?.some(s => s.size.toLowerCase().includes(selectedSize.toLowerCase()) && (inStockOnly ? s.in_stock && s.qty > 0 : true)));
-  }
+    filtered = filtered.filter(p => p.price <= priceRange);
 
-  if (inStockOnly) {
-    filtered = filtered.filter(p => p.sizes?.some(s => s.in_stock && s.qty > 0));
+    if (selectedSize !== 'all') {
+      filtered = filtered.filter(p => p.sizes?.some(s => s.size.toLowerCase().includes(selectedSize.toLowerCase()) && (inStockOnly ? s.in_stock && s.qty > 0 : true)));
+    }
+
+    if (inStockOnly) {
+      filtered = filtered.filter(p => p.sizes?.some(s => s.in_stock && s.qty > 0));
+    }
   }
 
   // Sort
@@ -128,12 +138,14 @@ function ShopContent() {
 
           {/* Sort Options & Mobile Filter Toggle */}
           <div className="flex items-center gap-3">
-            <button
-              onClick={() => setIsMobileFilterOpen(!isMobileFilterOpen)}
-              className="lg:hidden px-4 py-2 bg-gray-100 hover:bg-gray-200 text-gray-800 rounded-xl text-xs font-bold flex items-center gap-1.5"
-            >
-              <Filter className="w-4 h-4" /> Filters
-            </button>
+            {!isWishlistFilter && (
+              <button
+                onClick={() => setIsMobileFilterOpen(!isMobileFilterOpen)}
+                className="lg:hidden px-4 py-2 bg-gray-100 hover:bg-gray-200 text-gray-800 rounded-xl text-xs font-bold flex items-center gap-1.5"
+              >
+                <Filter className="w-4 h-4" /> Filters
+              </button>
+            )}
 
             <div className="flex items-center gap-2 bg-gray-50 border border-gray-200 rounded-xl px-3 py-1.5">
               <ArrowUpDown className="w-3.5 h-3.5 text-gray-500" />
@@ -155,7 +167,8 @@ function ShopContent() {
       {/* 2. Main Grid with Sidebar Filters */}
       <div className="flex flex-col lg:flex-row gap-8">
 
-        {/* Sidebar Filters */}
+        {/* Sidebar Filters (Hidden on Wishlist) */}
+        {!isWishlistFilter && (
         <aside className={`lg:w-64 w-full shrink-0 space-y-8 ${isMobileFilterOpen ? 'block' : 'hidden lg:block'}`}>
 
           {/* Categories Filter */}
@@ -175,9 +188,10 @@ function ShopContent() {
               {categories.map((cat) => {
                 const count = products.filter(p =>
                   p.category_id === cat.id ||
-                  p.category_name.toLowerCase() === cat.title.toLowerCase() ||
-                  cat.slug.toLowerCase().includes(p.category_name.toLowerCase())
-                ).length || cat.itemCount || 0;
+                  (p.category_ids && p.category_ids.includes(cat.id)) ||
+                  (p.category_slugs && p.category_slugs.includes(cat.slug.toLowerCase())) ||
+                  p.category_name.toLowerCase() === cat.title.toLowerCase()
+                ).length;
 
                 return (
                   <button
@@ -278,6 +292,7 @@ function ShopContent() {
           </button>
 
         </aside>
+        )}
 
         {/* Product Grid */}
         <main className="flex-1">
@@ -286,19 +301,32 @@ function ShopContent() {
           ) : filtered.length === 0 ? (
             <div className="py-16 text-center bg-gray-50 rounded-2xl p-8">
               <Sparkles className="w-12 h-12 text-gray-300 mx-auto mb-3" />
-              <h3 className="text-lg font-bold text-gray-800">No footwear pairs found</h3>
+              <h3 className="text-lg font-bold text-gray-800">
+                {isWishlistFilter ? 'Your Wishlist is Empty' : 'No footwear pairs found'}
+              </h3>
               <p className="text-xs text-gray-500 mt-1 max-w-sm mx-auto">
-                We couldn't find any footwear matching your chosen size or category filter. Try clearing filters.
+                {isWishlistFilter
+                  ? "You haven't added any footwear to your wishlist yet. Browse the collection and save your favorites!"
+                  : "We couldn't find any footwear matching your chosen size or category filter. Try clearing filters."}
               </p>
-              <button
-                onClick={() => { setSelectedCategory('all'); setSearchQuery(''); setPriceRange(6000); setSelectedSize('all'); setInStockOnly(false); }}
-                className="mt-5 px-6 py-2.5 bg-[#e63946] text-white text-xs font-bold rounded-xl"
-              >
-                Reset Filters
-              </button>
+              {isWishlistFilter ? (
+                <Link
+                  href="/shop"
+                  className="mt-5 inline-block px-6 py-2.5 bg-[#e63946] hover:bg-[#c1121f] text-white text-xs font-bold rounded-xl transition-colors shadow-sm"
+                >
+                  Explore Footwear Collection
+                </Link>
+              ) : (
+                <button
+                  onClick={() => { setSelectedCategory('all'); setSearchQuery(''); setPriceRange(6000); setSelectedSize('all'); setInStockOnly(false); }}
+                  className="mt-5 px-6 py-2.5 bg-[#e63946] text-white text-xs font-bold rounded-xl"
+                >
+                  Reset Filters
+                </button>
+              )}
             </div>
           ) : (
-            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-6">
+            <div className={`grid gap-6 ${isWishlistFilter ? 'grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4' : 'grid-cols-1 sm:grid-cols-2 md:grid-cols-3'}`}>
               {filtered.map((product) => (
                 <ProductCard
                   key={product.id}

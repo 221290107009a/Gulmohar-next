@@ -17,12 +17,14 @@ export const WishlistProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   const [mounted, setMounted] = useState(false);
 
   useEffect(() => {
+    // Restore persisted wishlist state after client hydration.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setMounted(true);
     const saved = localStorage.getItem('gulmohar_wishlist');
     if (saved) {
       try {
-        setWishlist(JSON.parse(saved));
-      } catch (e) {
+        setWishlist(JSON.parse(saved) as ProductItem[]);
+      } catch {
         console.error('Failed to parse saved wishlist');
       }
     }

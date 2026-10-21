@@ -20,7 +20,7 @@ export default function PrivacyPolicyPage() {
         <div className="p-6 bg-gray-50 rounded-2xl border border-gray-200 flex items-start gap-4">
           <ShieldCheck className="w-8 h-8 text-[#d4af37] shrink-0 mt-1" />
           <p className="text-gray-700">
-            <strong>Your Privacy Matters:</strong> Gulmohar Footwear ("we", "our", "us") respects your confidentiality. We process personal data solely to fulfill orders, provide customer support, and enhance your shopping experience.
+            <strong>Your Privacy Matters:</strong> Gulmohar Footwear (&quot;we&quot;, &quot;our&quot;, &quot;us&quot;) respects your confidentiality. We process personal data solely to fulfill orders, provide customer support, and enhance your shopping experience.
           </p>
         </div>
 
